@@ -1,0 +1,40 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow: hidden;
+  /* 加载期露出来的底色。原来是亮绿 #8aac86(实测 rgb(138,172,134)、亮度 148),
+     而池塘照片的中位色只有 93 —— 「页面起来但 canvas 还没画第一帧」那一段就是整屏亮绿。
+     改成深水色(与 theme 的 --koi-bg 同一档),读起来就是水。 */
+  background-color: #0a1f20;
+  width: 100vw;
+  height: 100vh;
+}
+
+#wallpaper-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+
+#vignette {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(
+    circle,
+    rgba(0, 0, 0, 0) 46%,
+    rgba(38, 70, 50, 0.30) 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
