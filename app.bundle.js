@@ -65,6 +65,7 @@ function createPondApp(canvas) {
         onAfterSync: () => features.get('customFish')?.syncCustomFish?.()
     });
     population.syncStock();
+    features.get('fishDebugPanel')?.restoreSaved?.();
     features.get('customFish')?.loadCustomFishFromStore?.();
 
     const { resolveFishCollisions } = createCollisions({ kois, config });
@@ -126,7 +127,7 @@ const { KOI_BREEDS } = __require("src/pond/breeds.js");
 const { SOLO_RATIO } = __require("src/pond/schools.js");
 // Fixed 12-point spine in this renderer. New skeletons require a new renderer/controller.
 const KOI_TYPE = {
-    id: 'koi', name: '锦鲤', segmentSpacing: 5,
+    id: 'koi', name: '中国淡水鱼', segmentSpacing: 5,
     shape: null, speedMultiplier: 1, turnRadius: 2.5,
     soloRatio: SOLO_RATIO, collisionRadius: 0.115, collisionEnd: 9,
     breeds: KOI_BREEDS
@@ -158,44 +159,91 @@ function createFishTypes() {
 Object.assign(exports, { createFishTypes, KOI_TYPE });
 };
 __modules["src/pond/breeds.js"] = function (exports, __require) {
+// 中国常见淡水鱼。继续沿用既有 breeds 数据入口，避免另建一套生物系统。
+// shape 是俯视轮廓倍率；patches 是沿脊柱分布的背部斑纹。
 const KOI_BREEDS = [
-    // patches: 多块斑,每块 = { segs:[连续段号], color, pw:相对体宽(0~0.72) }
-    //   —— 一块斑是"贴纸",两三块大小不一、颜色微差才是锦鲤
-    // net   鳞片网强度(網目/松葉,最能拉开质感的一项)
-    // sheen 金属光泽(黄金/孔雀这类亮皮)
-    // kuchi 红唇(红白常见)   edge 腹侧红边(浅黄的标志)
-    { name: '红白', body: '#f6f3ea', w: 0.25, net: 0.055, kuchi: '#e0562a',
-      patches: [ { segs: [1, 2],    color: '#e0562a', pw: 0.60 },
-                 { segs: [6, 7],    color: '#e34f24', pw: 0.46 } ] },
-
-    { name: '大正三色', body: '#f6f3ea', w: 0.15, net: 0.055,
-      patches: [ { segs: [2, 3],    color: '#dc4a20', pw: 0.58 },
-                 { segs: [4, 5],    color: '#2a241c', pw: 0.28 },
-                 { segs: [7, 8],    color: '#2a241c', pw: 0.22 } ] },
-
-    { name: '昭和三色', body: '#3b352b', w: 0.09, net: 0.075, sheen: 0.14,
-      patches: [ { segs: [1, 2, 3], color: '#eae5d8', pw: 0.60 },
-                 { segs: [5, 6],    color: '#d8441c', pw: 0.50 } ] },
-
-    { name: '白别甲', body: '#f6f3ea', w: 0.11, net: 0.060,
-      patches: [ { segs: [2, 3],    color: '#2a241c', pw: 0.40 },
-                 { segs: [6, 7],    color: '#2a241c', pw: 0.34 } ] },
-
-    { name: '黄金', body: '#eab842', w: 0.14, net: 0.10, sheen: 0.30,
-      patches: [] },
-
-    { name: '孔雀', body: '#e0a83c', w: 0.08, net: 0.17, sheen: 0.26,
-      patches: [ { segs: [3, 4, 5], color: '#d2571e', pw: 0.48 } ] },
-
-    { name: '浅黄', body: '#9db8c8', w: 0.08, net: 0.15, edge: '#c0483a',
-      patches: [] },
-
-    { name: '绯', body: '#dd5322', w: 0.10, net: 0.05, sheen: 0.15,
-      patches: [] }
+    {
+        id: 'grass-carp', name: '草鱼', w: 0.15, body: '#87906f', size: 1.08,
+        net: 0.20, sheen: 0.05, outlineWidth: 0.10,
+        shape: { bodyLen: 1.14, bodyH: 0.72, headW: 0.94, tailW: 0.88, tailFin: 0.86, fin: 0.82, eye: 0.82 },
+        patches: []
+    },
+    {
+        id: 'crucian-carp', name: '鲫鱼', w: 0.13, body: '#a9aa8b', size: 0.82,
+        net: 0.15, sheen: 0.09, outlineWidth: 0.11,
+        shape: { bodyLen: 0.90, bodyH: 1.24, headW: 0.88, tailW: 0.82, tailFin: 0.82, fin: 0.88, eye: 0.92 },
+        patches: []
+    },
+    {
+        id: 'common-carp', name: '鲤鱼', w: 0.13, body: '#a37b43', size: 1.00,
+        net: 0.24, sheen: 0.10, outlineWidth: 0.12,
+        shape: { bodyLen: 1.02, bodyH: 1.02, headW: 1.08, tailW: 0.94, tailFin: 0.96, fin: 1.00, eye: 0.86 },
+        patches: []
+    },
+    {
+        id: 'silver-carp', name: '鲢鱼', w: 0.11, body: '#c5c9bd', size: 1.04,
+        net: 0.08, sheen: 0.15, outlineWidth: 0.08,
+        shape: { bodyLen: 1.00, bodyH: 1.04, headW: 1.12, tailW: 0.82, tailFin: 0.88, fin: 0.92, eye: 0.72 },
+        patches: []
+    },
+    {
+        id: 'bighead-carp', name: '鳙鱼（花鲢）', w: 0.10, body: '#8e9182', size: 1.08,
+        net: 0.06, sheen: 0.05, outlineWidth: 0.10,
+        shape: { bodyLen: 0.98, bodyH: 1.12, headW: 1.42, tailW: 0.82, tailFin: 0.88, fin: 0.94, eye: 0.72 },
+        patches: [
+            { segs: [1, 2], color: '#62685d', pw: 0.42 },
+            { segs: [4, 5], color: '#6d7065', pw: 0.56 },
+            { segs: [7, 8], color: '#5b625a', pw: 0.38 }
+        ]
+    },
+    {
+        id: 'black-carp', name: '青鱼', w: 0.10, body: '#465b59', size: 1.12,
+        net: 0.22, sheen: 0.07, outlineWidth: 0.10,
+        shape: { bodyLen: 1.15, bodyH: 0.80, headW: 0.98, tailW: 0.92, tailFin: 0.88, fin: 0.84, eye: 0.78 },
+        patches: []
+    },
+    {
+        id: 'mandarin-fish', name: '鳜鱼', w: 0.08, body: '#9a8954', size: 0.88,
+        net: 0.05, sheen: 0.03, outlineWidth: 0.14,
+        shape: { bodyLen: 0.88, bodyH: 1.32, headW: 1.36, tailW: 0.82, tailFin: 1.02, fin: 1.18, eye: 1.12 },
+        patches: [
+            { segs: [1, 2], color: '#4b4938', pw: 0.62 },
+            { segs: [4, 5], color: '#5a5034', pw: 0.52 },
+            { segs: [7], color: '#403f34', pw: 0.46 }
+        ]
+    },
+    {
+        id: 'snakehead', name: '乌鳢（黑鱼）', w: 0.08, body: '#4c5542', size: 0.96,
+        net: 0.03, sheen: 0.02, outlineWidth: 0.12,
+        shape: { bodyLen: 1.22, bodyH: 0.62, headW: 1.22, tailW: 0.88, tailFin: 0.66, fin: 0.64, eye: 0.76 },
+        patches: [
+            { segs: [1], color: '#252d28', pw: 0.62 },
+            { segs: [3], color: '#31362d', pw: 0.68 },
+            { segs: [5], color: '#242c27', pw: 0.64 },
+            { segs: [7], color: '#30372d', pw: 0.58 },
+            { segs: [9], color: '#222a26', pw: 0.48 }
+        ]
+    },
+    {
+        id: 'yellow-catfish', name: '黄颡鱼', w: 0.06, body: '#b99a45', size: 0.75,
+        net: 0, sheen: 0.04, outlineWidth: 0.13,
+        shape: { bodyLen: 1.08, bodyH: 0.70, headW: 1.38, tailW: 0.72, tailFin: 0.74, fin: 1.18, eye: 0.86 },
+        patches: [
+            { segs: [1, 2], color: '#5f562f', pw: 0.58 },
+            { segs: [5, 6], color: '#625833', pw: 0.50 }
+        ]
+    },
+    {
+        id: 'wuchang-bream', name: '武昌鱼（团头鲂）', w: 0.06, body: '#8f9b8d', size: 0.85,
+        net: 0.12, sheen: 0.08, outlineWidth: 0.10,
+        shape: { bodyLen: 0.78, bodyH: 1.58, headW: 0.78, tailW: 0.72, tailFin: 0.86, fin: 0.90, eye: 0.92 },
+        patches: [
+            { segs: [3], color: '#68766c', pw: 0.60 },
+            { segs: [5], color: '#647268', pw: 0.62 },
+            { segs: [7], color: '#607067', pw: 0.56 }
+        ]
+    }
 ];
-
-const ids=['kohaku','taisho-sanke','showa-sanke','shiro-bekko','ogon','kujaku','asagi','hi'];
-KOI_BREEDS.forEach((b,i)=>{b.id=ids[i];});
 
 Object.assign(exports, { KOI_BREEDS });
 };
@@ -396,7 +444,10 @@ __modules["src/core/settings.js"] = function (exports, __require) {
 const DEFAULT_SETTINGS = {
     // 独立网页版使用这里的默认值。
     // 被改成 0 的那次,页面上就只剩一个空池塘(宿主会推值 ≠ 默认值可以随便设)。
-    fishCount: 80,
+    // 普通库存鱼保持关闭；首次打开程序时由“我的鱼”面板生成初始鱼。
+    fishCount: 0,
+    // 首次自动生成鱼时，复用已有颜色的概率(0~1)。
+    initialSameColorProbability: 0.28,
 
     useGpuCaustics: true,
     useGpuRipples: true,
@@ -410,7 +461,7 @@ const DEFAULT_SETTINGS = {
     enableCaustics: true,
     enableFeeding: true,
     shyFish: true,
-    fishSize: 1.45,
+    fishSize: 2.2,
     rippleStrength: 0.7,
 
     // 天气(2026-09-26):0=晴 1=雨(阴天已按用户决定摘掉)。**数字下标**——
@@ -1191,7 +1242,7 @@ const WATER_TINT = THEME.water.tint;
 const koiWidth = KOI_SHAPE.koiWidth;
 const traceClosedSmooth = KOI_SHAPE.traceClosedSmooth;
 function createFishRenderer({ config }) {
-const FISH_SCALES = false;
+const FISH_SCALES = true;
 function drawFish(ctx) {
         let dropAlpha = 1;
 
@@ -1384,7 +1435,7 @@ function drawFish(ctx) {
         bodyGrad.addColorStop(0.78, shadeColor(ab, -0.14 * con));
         bodyGrad.addColorStop(1.00, shadeColor(ab, -0.30 * con));    // 背光面
         bodyPath();
-        if (this.skinReady && this.skin && this.skin.naturalWidth) {
+        if (this.skinReady && this.skin && (this.skin.naturalWidth || this.skin.width)) {
 
             ctx.save();
             ctx.clip();                       // bodyPath() 刚 beginPath,直接裁在体轮廓里
@@ -1475,7 +1526,8 @@ function drawFish(ctx) {
         //   原来一律白 + 一律深,所以像印上去的纹理,没有立体感。
         // ★ 头、腹、尾要淡出 —— 真鱼这几个部位是光的(腹部尤其)。
 
-        const SCALE_MIN_HALF = 14;
+        // 小鱼不画独立鳞片，避免 80 条鱼时产生大量看不见的细碎描边。
+        const SCALE_MIN_HALF = 9;
         if (FISH_SCALES && this.net > 0.012 && maxHalf >= SCALE_MIN_HALF) {
             const ROWS = 13;
             const rowGap = (BODY_SPAN / (ROWS + 1)) * total;       // 列间距(px)
@@ -1576,7 +1628,7 @@ function drawFish(ctx) {
             // 两片鳍向前盖在身体上成了一层灰膜 —— 这就是"鳍没连到鱼腹"的根因。
             const P = KOI_SHAPE.PECTORAL;
             let ang = Math.atan2(pf.ty, pf.tx) + sgn * P.spread
-                    + Math.sin(this.swimCycle * P.flapFreq) * P.flapAmp;
+                    + Math.sin(this.swimCycle * P.flapFreq) * P.flapAmp * (this.previewMotion ? 0.42 : 1);
             let fl = KOI_SHAPE.pectoralFinLen(maxHalf, this.shape);
             ctx.save();
             ctx.translate(bx, by);
@@ -1600,7 +1652,8 @@ function drawFish(ctx) {
         let pedW = W(1.0) * maxHalf;
 
         let tAng = Math.atan2(tp.ty, tp.tx)
-                 + Math.sin(this.swimCycle * this.waveFreq - this.waveLen) * KOI_SHAPE.TAIL.anglePhase;
+                 + Math.sin(this.swimCycle * this.waveFreq - this.waveLen)
+                 * KOI_SHAPE.TAIL.anglePhase * (this.previewMotion ? 0.42 : 1);
         let tl = KOI_SHAPE.tailFinLen(maxHalf, this.shape);
         ctx.save();
         ctx.translate(tp.x, tp.y);
@@ -1704,7 +1757,11 @@ function buildSmoothNormals(at, N, win) {
     };
 }
 function drawSkinOnBody(ctx, at, BS, W, maxHalf, img, nose, noseW, capDepth) {
-    const TW = img.naturalWidth, TH = img.naturalHeight;
+    // HTMLImageElement uses naturalWidth/naturalHeight; the live editor passes an
+    // HTMLCanvasElement so brush strokes can appear without encoding/reloading an image.
+    const TW = img.naturalWidth || img.width;
+    const TH = img.naturalHeight || img.height;
+    if (!(TW > 0 && TH > 0)) return;
 
     const K = 40;
 
@@ -2679,29 +2736,32 @@ __modules["src/builtins.js"] = function (exports, __require) {
 const { createKoiCreature } = __require("src/pond/creatures/koi-fish.js");
 const { createClock } = __require("src/features/clock.js");
 const { createFeeding } = __require("src/features/feeding.js");
-const { createCustomFish } = __require("src/features/custom-fish.js");
+const { createFishManager } = __require("src/features/fish-manager.js");
 const { createWeather } = __require("src/features/weather.js");
 const { createIdleDrift } = __require("src/features/idle-drift.js");
 const { createDayCycle } = __require("src/features/day-cycle.js");
 const { createFishDebugPanel } = __require("src/ui/fish-debug-panel.js");
 const { createRippleDebugPanel } = __require("src/ui/ripple-debug-panel.js");
 const { createClockDebugPanel } = __require("src/ui/clock-debug-panel.js");
+const { THEME } = __require("src/shared/legacy-assets.js");
 function registerBuiltins({ creatures, features, context }) {
-    // ── 生物:锦鲤(默认 kind,鱼种不声明 creature 时用它) ──
-    // 锦鲤这个 kind 的依赖(context 里的学校/渲染器)由装配层提供,但"它是谁"由这份清单决定
+    // ── 生物:中国淡水鱼(复用既有分节身体与群游控制器) ──
     const koiKind = createKoiCreature({
         config: context.config, viewport: context.viewport, time: context.time, kois: context.kois,
         foods: context.foods, mouse: context.mouse, spawnRipple: context.spawnRipple,
         schoolSystem: context.schoolSystem, drawFish: context.drawFish
     });
-    creatures.register({ id: 'koi-fish', title: '锦鲤', create: koiKind.create, exports: koiKind });
+    creatures.register({ id: 'koi-fish', title: '中国淡水鱼', create: koiKind.create, exports: koiKind });
 
-    // ── 玩法:时钟(沉在水下的 hud 层) ──
+    // ── 玩法:时钟(可在水下 hud 与最上层 ui 之间切换) ──
     features.register({ id: 'clock', title: '时钟', create: () => {
         const clock = createClock({ viewport: context.viewport });
         let on = true;
         return {
-            layers: { hud: g => { if (on) clock.draw(g); } },
+            layers: {
+                hud: g => { if (on && !THEME.clock.foreground) clock.draw(g); },
+                ui: g => { if (on && THEME.clock.foreground) clock.draw(g); }
+            },
             setEnabled(next) { on = !!next; }        // 与第一轮一致:关掉只是不画,不是卸载
         };
     } });
@@ -2715,9 +2775,9 @@ function registerBuiltins({ creatures, features, context }) {
         };
     } });
 
-    // ── 玩法:自定义鱼(用户捏的鱼;禁用时连鱼带监听一起收走) ──
+    // ── 玩法:用户鱼数据库、添加器与状态面板 ──
     features.register({ id: 'customFish', title: '自定义鱼', create: () => {
-        const make = () => createCustomFish({
+        const make = () => createFishManager({
             Koi: koiKind.Koi, koiType: context.types.get('koi'),
             kois: context.kois, config: context.config, viewport: context.viewport,
             spawnRipple: context.spawnRipple, repository: context.repository
@@ -2726,6 +2786,7 @@ function registerBuiltins({ creatures, features, context }) {
         return {
             loadCustomFishFromStore: (...a) => inst?.loadCustomFishFromStore(...a),
             syncCustomFish: (...a) => inst?.syncCustomFish(...a),
+            update: (...a) => inst?.update?.(...a),
             setEnabled(on) {
                 if (!on) { inst?.dispose(); inst = null; }
                 else if (!inst) { inst = make(); inst.loadCustomFishFromStore(); }
@@ -2753,14 +2814,17 @@ function registerBuiltins({ creatures, features, context }) {
 
     // 独立编辑版的实时外观调试面板。
     features.register({ id: 'fishDebugPanel', title: '鱼外观调试', create: () => createFishDebugPanel({
-        kois: context.kois, config: context.config, types: context.types
+        kois: context.kois, config: context.config, types: context.types, repository: context.repository
     }) });
 
     features.register({ id: 'rippleDebugPanel', title: '波纹调试', create: () => createRippleDebugPanel({
-        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple
+        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple,
+        repository: context.repository
     }) });
 
-    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel() });
+    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel({
+        repository: context.repository
+    }) });
 
     return { creatures, features };
 }
@@ -2800,11 +2864,11 @@ class Koi {
         this.baseSpeed = (0.4 + Math.random() * 0.4) * this.type.speedMultiplier;
         this.maxForce = 0.03;
 
-        this.pickBreed();
         // 尺寸和深浅差异:没有这个,一池鱼像复制粘贴
         this.depth = Math.random();
-        // 整体再缩小约 17%，但仍保留能一眼辨认的小鱼与大鱼。
-        this.sizeMul = 0.40 + this.depth * 0.56;
+        this.baseSizeMul = 0.40 + this.depth * 0.56;
+        this.pickBreed();
+        this.sizeMul = this.baseSizeMul * this.breedSize;
 
         this.segments = [];
         this.numSegments = 12;
@@ -2883,6 +2947,10 @@ class Koi {
     applyBreed(pick) {
         this.breedId = pick.id || 'custom-palette';
         this.breed = pick.name;
+        this.breedSize = pick.size || 1;
+        if (this.baseSizeMul) this.sizeMul = this.baseSizeMul * this.breedSize;
+        this.shape = KOI_SHAPE.clampShape(pick.shape || this.type.shape);
+        this.outlineWidth = pick.outlineWidth ?? 0.10;
         const tint = (Math.random() - 0.5) * 0.18;
         this.color = varyHexColor(pick.body, tint);
 
@@ -3119,7 +3187,7 @@ function update(dt) {
 
             if (minDistSq < EAT_RADIUS_SQ || this.bodyTouchesFood(target)) {
                 foods.splice(foods.indexOf(target), 1);
-
+                this.onEat?.();
                 this.fedTimer = 51;
             }
 
@@ -3334,6 +3402,151 @@ const lx = () => THEME.light.dir[0];
 const ly = () => THEME.light.dir[1];
 function createClock({ viewport }) {
 let clockTime = '', clockDate = '', clockStamp = '';
+const glassCache = new Map();
+const cardBuffer = document.createElement('canvas');
+
+function roundedRect(g, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + width, y, x + width, y + height, r);
+    g.arcTo(x + width, y + height, x, y + height, r);
+    g.arcTo(x, y + height, x, y, r);
+    g.arcTo(x, y, x + width, y, r);
+    g.closePath();
+}
+
+function drawFrostedCard(g, x, y, width, height, short, T) {
+    const blur = Math.max(0.1, short * (T.cardBlur ?? 0.012));
+    const opacity = T.cardOpacity ?? 0.45;
+    const bleed = Math.ceil(blur * 2);
+    const sx = Math.max(0, Math.floor(x - bleed));
+    const sy = Math.max(0, Math.floor(y - bleed));
+    const sw = Math.min(g.canvas.width - sx, Math.ceil(width + bleed * 2));
+    const sh = Math.min(g.canvas.height - sy, Math.ceil(height + bleed * 2));
+    if (cardBuffer.width !== sw || cardBuffer.height !== sh) {
+        cardBuffer.width = sw;
+        cardBuffer.height = sh;
+    }
+    const bg = cardBuffer.getContext('2d');
+    bg.clearRect(0, 0, sw, sh);
+    bg.filter = 'blur(' + blur.toFixed(1) + 'px) saturate(82%)';
+    bg.drawImage(g.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    bg.filter = 'none';
+
+    const radius = Math.max(2, short * (T.cardRadius ?? 0.022));
+    g.save();
+    roundedRect(g, x, y, width, height, radius);
+    g.fillStyle = 'rgba(24,45,38,0.16)';
+    g.shadowColor = 'rgba(8,27,23,' + (T.cardShadow ?? 0.34).toFixed(3) + ')';
+    g.shadowBlur = short * 0.026;
+    g.shadowOffsetX = -lx() * short * 0.008;
+    g.shadowOffsetY = -ly() * short * 0.008;
+    g.fill();
+    g.restore();
+
+    g.save();
+    roundedRect(g, x, y, width, height, radius);
+    g.clip();
+    g.drawImage(cardBuffer, sx, sy);
+    const tintValue = parseInt(String(T.cardTint || '#d7e2d1').slice(1), 16);
+    const tr = tintValue >> 16, tg = (tintValue >> 8) & 255, tb = tintValue & 255;
+    const tint = g.createLinearGradient(x, y, x + width, y + height);
+    tint.addColorStop(0, 'rgba(' + Math.round(tr + (255 - tr) * 0.32) + ',' + Math.round(tg + (255 - tg) * 0.32) + ',' + Math.round(tb + (255 - tb) * 0.32) + ',' + Math.min(0.9, opacity * 1.22).toFixed(3) + ')');
+    tint.addColorStop(0.56, 'rgba(' + tr + ',' + tg + ',' + tb + ',' + opacity.toFixed(3) + ')');
+    tint.addColorStop(1, 'rgba(' + Math.round(tr * 0.86) + ',' + Math.round(tg * 0.90) + ',' + Math.round(tb * 0.88) + ',' + (opacity * 0.76).toFixed(3) + ')');
+    g.fillStyle = tint;
+    g.fillRect(x, y, width, height);
+    g.restore();
+
+    g.save();
+    roundedRect(g, x + 0.5, y + 0.5, width - 1, height - 1, radius - 0.5);
+    g.strokeStyle = 'rgba(249,255,244,0.62)';
+    g.lineWidth = 1;
+    g.stroke();
+    g.restore();
+}
+
+function glassText(text, size, weight, T) {
+    const strength = Math.max(0.1, T.dropletStrength ?? 0.3);
+    const lightX = Math.round(lx() * 10) / 10, lightY = Math.round(ly() * 10) / 10;
+    const key = [text, Math.round(size), weight, T.font, strength, lightX, lightY].join('|');
+    if (glassCache.has(key)) return glassCache.get(key);
+
+    const source = document.createElement('canvas');
+    const probe = source.getContext('2d');
+    probe.font = weight + ' ' + Math.round(size) + 'px ' + T.font;
+    const metrics = probe.measureText(text);
+    const ascent = Math.ceil(metrics.actualBoundingBoxAscent || size * 0.8);
+    const descent = Math.ceil(metrics.actualBoundingBoxDescent || size * 0.25);
+    const blur = Math.max(1, size * 0.12 * strength);
+    const rim = Math.max(2, Math.round(size * 0.034 * strength));
+    const pad = Math.ceil(blur * 2 + rim * 3 + 2);
+    source.width = Math.ceil(metrics.width) + pad * 2;
+    source.height = ascent + descent + pad * 2;
+
+    const sg = source.getContext('2d');
+    sg.font = weight + ' ' + Math.round(size) + 'px ' + T.font;
+    sg.textBaseline = 'alphabetic';
+    sg.fillStyle = '#fff';
+    sg.fillText(text, pad, pad + ascent);
+
+    const blurred = document.createElement('canvas');
+    blurred.width = source.width;
+    blurred.height = source.height;
+    const bg = blurred.getContext('2d');
+    bg.filter = 'blur(' + blur.toFixed(2) + 'px)';
+    bg.drawImage(source, 0, 0);
+    bg.filter = 'none';
+
+    const raw = bg.getImageData(0, 0, blurred.width, blurred.height);
+    const solid = sg.getImageData(0, 0, source.width, source.height).data;
+    const mask = new Uint8Array(source.width * source.height);
+    for (let i = 0, p = 0; i < mask.length; i++, p += 4) {
+        // 与参考 SVG 的 feColorMatrix 相同：把模糊 Alpha 挤回圆润的液态轮廓。
+        const goo = Math.max(0, Math.min(1, raw.data[p + 3] / 255 * 25 - 10));
+        mask[i] = Math.max(solid[p + 3], goo * 255) > 127 ? 1 : 0;
+    }
+
+    const glass = document.createElement('canvas');
+    glass.width = source.width;
+    glass.height = source.height;
+    const gg = glass.getContext('2d');
+    const pixels = gg.createImageData(glass.width, glass.height);
+    const sample = (x, y) => x < 0 || y < 0 || x >= glass.width || y >= glass.height ? 0 : mask[y * glass.width + x];
+    const offsets = [[rim, 0], [-rim, 0], [0, rim], [0, -rim], [rim, rim], [-rim, rim], [rim, -rim], [-rim, -rim]];
+
+    for (let y = 0; y < glass.height; y++) for (let x = 0; x < glass.width; x++) {
+        const inside = sample(x, y);
+        if (!offsets.some(([ox, oy]) => sample(x + ox, y + oy) !== inside)) continue;
+        const gx = sample(x - rim, y) - sample(x + rim, y);
+        const gy = sample(x, y - rim) - sample(x, y + rim);
+        const length = Math.hypot(gx, gy) || 1;
+        const facing = Math.max(-1, Math.min(1, (gx * lightX + gy * lightY) / length));
+        const shine = Math.pow((facing + 1) / 2, 2.2);
+        const p = (y * glass.width + x) * 4;
+        if (inside) {
+            // 内沿像水滴迎光面：清亮但不填满字面。
+            pixels.data[p] = 150 + Math.round(97 * shine);
+            pixels.data[p + 1] = 210 + Math.round(45 * shine);
+            pixels.data[p + 2] = 207 + Math.round(45 * shine);
+            pixels.data[p + 3] = Math.round(255 * Math.min(0.92, 0.38 + shine * 0.50));
+        } else {
+            // 外沿是透过水体看到的深色折射圈，保证浅水背景上仍能辨认。
+            pixels.data[p] = 3 + Math.round(38 * shine);
+            pixels.data[p + 1] = 35 + Math.round(70 * shine);
+            pixels.data[p + 2] = 39 + Math.round(67 * shine);
+            pixels.data[p + 3] = Math.round(255 * (0.46 - shine * 0.12));
+        }
+    }
+    gg.putImageData(pixels, 0, 0);
+
+    const result = { canvas: glass, width: metrics.width, pad };
+    glassCache.set(key, result);
+    if (glassCache.size > 8) glassCache.delete(glassCache.keys().next().value);
+    return result;
+}
+
 function refreshClockText() {
     const d = new Date();
     const stamp = d.getFullYear() + '/' + d.getMonth() + '/' + d.getDate() + ' ' + d.getHours() + ':' + d.getMinutes();
@@ -3363,11 +3576,26 @@ function drawClock(g) {
     g.textAlign = horiz === 'left' ? 'left' : (horiz === 'right' ? 'right' : 'center');
     const cx = horiz === 'left' ? mx : (horiz === 'right' ? viewport.width - mx : viewport.width / 2);
 
+    const timeWeight = T.weight || 600;
+    const dateWeight = Math.max(300, timeWeight - 200);
+    g.font = timeWeight + ' ' + Math.round(tSize) + 'px ' + T.font;
+    const timeWidth = g.measureText(clockTime).width;
+    g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
+    const dateWidth = g.measureText(clockDate).width;
+
     // 时间在上、日期在下;整块的高度用来做垂直锚点
     const blockH = tSize + gap + dSize;
     const top = vert === 'top' ? my : viewport.height - my - blockH;
     const timeY = top + tSize / 2;
     const dateY = top + tSize + gap + dSize / 2;
+
+    if (T.cardGlass) {
+        const padX = tSize * 0.34, padY = tSize * 0.30;
+        const cardWidth = Math.max(timeWidth, dateWidth) + padX * 2;
+        const cardHeight = blockH + padY * 2;
+        const cardX = horiz === 'left' ? cx - padX : (horiz === 'right' ? cx - cardWidth + padX : cx - cardWidth / 2);
+        drawFrostedCard(g, cardX, top - padY, cardWidth, cardHeight, short, T);
+    }
 
     // 影子沿全局光向偏移 + 模糊 —— 和鱼的影子同一套光,才会像"在这个场景里"
     const off = short * T.shadowOffset;
@@ -3377,22 +3605,32 @@ function drawClock(g) {
     g.shadowOffsetY = -ly() * off;
 
     const rf = short * 0.0022;
-    g.save();
-    g.shadowColor = 'transparent';
-    g.fillStyle = 'rgba(150,220,215,0.20)';
-    const timeWeight = T.weight || 600;
-    const dateWeight = Math.max(300, timeWeight - 200);
-    g.font = timeWeight + ' ' + Math.round(tSize) + 'px ' + T.font;
-    g.fillText(clockTime, cx - lx() * rf, timeY - ly() * rf);
-    g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
-    g.fillText(clockDate, cx - lx() * rf, dateY - ly() * rf);
-    g.restore();
+    function drawMainText(text, x, y, size, weight) {
+        g.font = weight + ' ' + Math.round(size) + 'px ' + T.font;
+        if (!T.droplet) {
+            g.fillStyle = T.cardGlass ? T.cardTextColor : T.color;
+            g.fillText(text, x, y);
+            return;
+        }
 
-    g.fillStyle = T.color;
-    g.font = timeWeight + ' ' + Math.round(tSize) + 'px ' + T.font;
-    g.fillText(clockTime, cx, timeY);
-    g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
-    g.fillText(clockDate, cx, dateY);
+        const glass = glassText(text, size, weight, T);
+        const left = g.textAlign === 'left' ? x : (g.textAlign === 'right' ? x - glass.width : x - glass.width / 2);
+        g.drawImage(glass.canvas, left - glass.pad, y - glass.canvas.height / 2);
+    }
+
+    if (!T.droplet) {
+        g.save();
+        g.shadowColor = 'transparent';
+        g.fillStyle = T.cardGlass ? 'rgba(17,70,60,0.14)' : 'rgba(150,220,215,0.20)';
+        g.font = timeWeight + ' ' + Math.round(tSize) + 'px ' + T.font;
+        g.fillText(clockTime, cx - lx() * rf, timeY - ly() * rf);
+        g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
+        g.fillText(clockDate, cx - lx() * rf, dateY - ly() * rf);
+        g.restore();
+    }
+
+    drawMainText(clockTime, cx, timeY, tSize, timeWeight);
+    drawMainText(clockDate, cx, dateY, dSize, dateWeight);
     g.restore();
 }
 
@@ -3430,128 +3668,741 @@ return { feedAt };
 
 Object.assign(exports, { createFeeding });
 };
-__modules["src/features/custom-fish.js"] = function (exports, __require) {
+__modules["src/features/fish-manager.js"] = function (exports, __require) {
 const { KOI_SHAPE } = __require("src/shared/legacy-assets.js");
 const { noseColorOf } = __require("src/render/fish-skin.js");
-function createCustomFish({ Koi, koiType, kois, config, viewport, spawnRipple, repository }) {
-const listeners = [];
-function listen(n, fn) { window.addEventListener(n, fn); listeners.push([n, fn]); }
-let customDefs = [];
-const customKoiById = new Map();
+const STORE_KEY = 'koi.user.fish.v2';
+const MAX_FISH = 24;
+const BOARD_W = 720;
+const BOARD_H = 320;
+const BODY_CENTER = BOARD_H / 2;
+const INITIAL_FISH_COUNT = 8;
+// 可通过 config.initialSameColorProbability 调整；默认约四分之一的鱼会复用已有颜色。
+const INITIAL_SAME_COLOR_PROBABILITY = 0.28;
+const INITIAL_COLOR_PALETTE = [
+    '#d88b52', '#c96b4b', '#e0b45e', '#b5ad68', '#8f9d78', '#718d86',
+    '#7896a4', '#a9758a', '#a96855', '#d0c29b', '#64766a', '#b88d62'
+];
 
-class CustomKoi extends Koi {
-    constructor(def) {
-        // 2026-09-26:生物构造签名改成 (type, opts) —— 自定义鱼是"锦鲤身体 + 自定义外观",
-        // 所以显式继承锦鲤这个 kind,并声明 origin='custom'(种群系统按 origin 决定谁受鱼数管理)
-        super(koiType, { custom: true, origin: 'custom' });
-        this.custom = true;
-        this.customId = def.id;
-        this.sizeMul = 0.50 + this.depth * 0.44;   // 自定义鱼是主角,给大一点
-        // 斑纹/鳞网/红唇/腹缘全部关掉 —— 用户涂什么就是什么
-        this.spotRanges = [];
-        this.net = 0; this.sheen = 0; this.kuchi = null; this.edge = null;
-        this.applyCustomDef(def);
-    }
-    applyCustomDef(def) {
-        this.shape = KOI_SHAPE.clampShape(def.shape);
-        this.name = def.name || '';
-        this.color = def.color || '#ffffff';
-        if (def.skin && def.skin !== this.skinSrc) {
-            this.skinSrc = def.skin;
-            const im = new Image();
-            // 解码期间继续用旧纹理,不闪白
-            im.onload = () => {
-                this.skin = im; this.skinReady = true;
-                this.noseColor = noseColorOf(im);
+const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
+const makeId = () => 'fish-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+const randomItem = list => list[Math.floor(Math.random() * list.length)];
+
+function addStyles() {
+    if (document.getElementById('fish-manager-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'fish-manager-styles';
+    style.textContent = [
+        '.fish-manager{--bg-top:rgba(18,71,67,.30);--bg:rgba(9,47,45,.30);--surface-1:rgba(224,255,246,.07);--surface-2:rgba(230,255,248,.11);--stroke:rgba(202,239,228,.18);--text:#f7fffb;--muted:rgba(226,245,238,.74);--accent:#f5a23e;--accent-ink:#2b2114;--control:#ef9131;--track:rgba(210,237,228,.24);position:fixed;inset:16px;z-index:40;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
+        '.fish-manager *{box-sizing:border-box}.fish-manager button,.fish-manager input,.fish-manager select{font:inherit}',
+        '.fish-manager__toggle{pointer-events:auto;position:absolute;right:0;top:0;height:40px;padding:0 15px;border:1px solid var(--stroke);border-radius:10px;background:linear-gradient(180deg,var(--bg-top),var(--bg));box-shadow:0 12px 30px rgba(0,24,22,.28);color:#fff;cursor:pointer}',
+        '.fish-manager__panel{pointer-events:auto;position:absolute;right:0;top:0;width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:18px;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3);scrollbar-color:rgba(242,175,92,.72) rgba(255,255,255,.06)}',
+        '.fish-manager__panel[hidden],.fish-manager__toggle[hidden]{display:none}.fish-manager__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.fish-manager__title{margin:0;font-size:15px;font-weight:700}.fish-manager__hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}',
+        '.fish-manager__close,.fish-manager__button{height:32px;padding:0 14px;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:#fff;cursor:pointer}.fish-manager button:hover{filter:brightness(1.10)}.fish-manager button:focus-visible,.fish-manager input:focus-visible,.fish-manager select:focus-visible{outline:2px solid #ffc66f;outline-offset:2px}.fish-manager__button--primary{height:36px;background:var(--accent);color:var(--accent-ink);font-weight:750;text-shadow:none}.fish-manager__button--danger{background:rgba(194,66,48,.46)}',
+        '.fish-manager__layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,350px);grid-template-rows:auto auto;gap:14px}.fish-manager__card{padding:14px;border:1px solid rgba(222,255,246,.08);border-radius:13px;background:var(--surface-1)}.fish-manager__section-title{margin:0 0 10px;font-size:15px;font-weight:750}',
+        '.fish-manager__form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.fish-manager__field{display:grid;gap:5px}.fish-manager__field label{color:var(--muted);font-size:12.5px}.fish-manager__field input,.fish-manager__field select{width:100%;height:30px;padding:0 9px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2);color:#fff}.fish-manager__field select option{color:#182b2c}.fish-manager__field input[type=color]{padding:2px}.fish-manager__field input[type=range]{height:18px;padding:0;border:0;background:transparent;accent-color:var(--control)}.fish-manager__range-value{color:var(--accent);font-variant-numeric:tabular-nums}',
+        '.fish-manager__editor-card{grid-column:1;grid-row:1}.fish-manager__list-card{grid-column:2;grid-row:1/span 2}.fish-manager__board-card{grid-column:1;grid-row:2}.fish-manager__board-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.fish-manager__tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.fish-manager__tools input[type=color]{width:42px;height:30px;padding:2px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2)}.fish-manager__tools input[type=range]{width:120px;accent-color:var(--control)}',
+        '.fish-manager__canvas-wrap{width:100%;min-height:360px;border:1px solid rgba(163,224,207,.18);border-radius:13px;overflow:hidden;background:#073936;box-shadow:inset 0 0 46px rgba(0,15,14,.44);touch-action:none}.fish-manager__canvas{display:block;width:100%;height:auto;min-height:360px;cursor:crosshair}.fish-manager__board-note{margin:8px 0 0;color:var(--muted);font-size:12.5px}.fish-manager__actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}',
+        '.fish-manager__list{display:grid;gap:9px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}.fish-manager__empty{display:grid;place-items:center;min-height:280px;color:var(--muted);text-align:center;white-space:pre-line}.fish-manager__fish{padding:12px;border:1px solid rgba(222,255,246,.08);border-radius:11px;background:rgba(217,255,244,.06)}.fish-manager__fish-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.fish-manager__fish-name{font-weight:700}.fish-manager__fish-kind{color:var(--muted);font-size:12.5px}.fish-manager__favorite{border:0;background:transparent;color:rgba(255,255,255,.55);font-size:20px;cursor:pointer}.fish-manager__favorite[aria-pressed=true]{color:var(--accent)}',
+        '.fish-manager__stats{display:grid;gap:7px;margin-top:10px}.fish-manager__stat{display:grid;grid-template-columns:58px 1fr 48px;align-items:center;gap:8px}.fish-manager__track{height:11px;border-radius:999px;background:var(--track);overflow:hidden}.fish-manager__fill{height:100%;border-radius:999px;background:var(--accent)}.fish-manager__value{text-align:right;color:var(--accent);font-variant-numeric:tabular-nums}.fish-manager__fish-actions{display:flex;justify-content:flex-end;margin-top:8px}.fish-manager__status{min-height:20px;margin:8px 0 0;color:var(--muted);font-size:12.5px}',
+        '@media(max-width:900px){.fish-manager{inset:8px}.fish-manager__panel{width:calc(100vw - 16px);max-height:calc(100vh - 16px);padding:12px}.fish-manager__layout{grid-template-columns:1fr;grid-template-rows:auto}.fish-manager__editor-card,.fish-manager__list-card,.fish-manager__board-card{grid-column:1;grid-row:auto}.fish-manager__list-card{order:3}.fish-manager__form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.fish-manager__canvas-wrap,.fish-manager__canvas{min-height:260px}.fish-manager__list{max-height:460px}}'
+    ].join('\n');
+    document.head.appendChild(style);
+}
+function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, repository }) {
+    addStyles();
+    const breedById = new Map(koiType.breeds.map(breed => [breed.id, breed]));
+    let definitions = [];
+    let storeUserManaged = false;
+    const fishById = new Map();
+    let previewFish = null;
+    let previewTransform = null;
+    let boardWaveTime = 0;
+    let statsElapsed = 0;
+    let saveElapsed = 0;
+
+    class UserFish extends Koi {
+        constructor(definition) {
+            super(koiType, { custom: true, origin: 'custom' });
+            this.custom = true;
+            this.onEat = () => {
+                this.hunger = clamp(this.hunger + 24, 0, 100);
+                this.mood = clamp(this.mood + 10, 0, 100);
             };
-            im.src = def.skin;
+            this.applyDefinition(definition);
         }
-    }
-}
 
-function syncCustomFish() {
-    for (let i = kois.length - 1; i >= 0; i--) {
-        const k = kois[i];
-        if (k.custom && !customDefs.some(d => d && d.id === k.customId)) {
-            kois.splice(i, 1); customKoiById.delete(k.customId);
+        applyDefinition(definition) {
+            const breed = breedById.get(definition.breedId) || koiType.breeds[0];
+            this.breedId = breed.id;
+            this.breed = breed.name;
+            this.breedSize = breed.size || 1;
+            this.net = breed.net || 0;
+            this.sheen = breed.sheen || 0;
+            this.kuchi = breed.kuchi || null;
+            this.edge = breed.edge || null;
+            this.outlineWidth = breed.outlineWidth ?? 0.10;
+            this.spotRanges = (breed.patches || []).flatMap(patch => {
+                const segments = patch.segs || [];
+                if (!segments.length) return [];
+                return [[
+                    Math.min(0.78, segments[0] / 11),
+                    Math.min(0.78, (segments[segments.length - 1] + 1) / 11),
+                    patch.color,
+                    patch.pw || 0.5
+                ]];
+            });
+            this.customId = definition.id;
+            this.name = definition.name || breed.name;
+            this.favorite = definition.favorite === true;
+            this.hunger = clamp(definition.hunger ?? 100, 0, 100);
+            this.mood = clamp(definition.mood ?? 100, 0, 100);
+            this.color = /^#[0-9a-f]{6}$/i.test(definition.color) ? definition.color : breed.body;
+            this.shape = KOI_SHAPE.clampShape(definition.shape || breed.shape);
+            this.baseSizeMul = 0.52 + this.depth * 0.30;
+            this.sizeMul = this.baseSizeMul * clamp(definition.size ?? breed.size ?? 1, 0.55, 1.65);
+            this.baseSpeed = 0.4 + this.depth * 0.22;
+            if (definition.skin && definition.skin !== this.skinSrc) {
+                this.skinSrc = definition.skin;
+                this.skinReady = false;
+                const image = new Image();
+                image.onload = () => {
+                    this.skin = image;
+                    this.skinReady = true;
+                    this.noseColor = noseColorOf(image);
+                    if (this === previewFish) renderBoard();
+                };
+                image.src = definition.skin;
+            }
         }
     }
-    customDefs.slice(0, 6).forEach(d => {          // 上限 6 条,再多就抢戏了
-        if (!d || !d.id) return;
-        let k = customKoiById.get(d.id);
-        if (!k) {
-            k = new CustomKoi(d);
-            customKoiById.set(d.id, k);
-            kois.push(k);
+
+    function loadDefinitions() {
+        const stored = repository.read(STORE_KEY, { list: [] });
+        storeUserManaged = stored?.userManaged === true;
+        definitions = Array.isArray(stored?.list)
+            ? stored.list.filter(item => item && typeof item.id === 'string').slice(0, MAX_FISH)
+            : [];
+    }
+
+    function saveDefinitions() {
+        for (const definition of definitions) {
+            const fish = fishById.get(definition.id);
+            if (!fish) continue;
+            definition.hunger = Math.round(fish.hunger * 10) / 10;
+            definition.mood = Math.round(fish.mood * 10) / 10;
+        }
+        repository.write(STORE_KEY, {
+            version: 2,
+            initialized: true,
+            userManaged: storeUserManaged,
+            list: definitions
+        });
+    }
+
+    function releaseFish(fish) {
+        const x = viewport.width * 0.5;
+        const y = viewport.height * 0.5;
+        fish.x = x;
+        fish.y = y;
+        for (const segment of fish.segments) { segment.x = x; segment.y = y; }
+        fish.heading = Math.random() * Math.PI * 2;
+        fish.angle = fish.heading;
+        fish.speed = 0;
+        fish.depth = Math.max(0.55, fish.depth);
+        fish.drop = { t: 0, dur: 1.05, splashed: false };
+        spawnRipple(x, y, 0.8 * config.rippleStrength);
+    }
+
+    function syncFish(releaseId = null) {
+        const ids = new Set(definitions.map(definition => definition.id));
+        for (let index = kois.length - 1; index >= 0; index--) {
+            const fish = kois[index];
+            if (fish.custom && !ids.has(fish.customId)) {
+                kois.splice(index, 1);
+                fishById.delete(fish.customId);
+            }
+        }
+        for (const definition of definitions) {
+            let fish = fishById.get(definition.id);
+            if (!fish) {
+                fish = new UserFish(definition);
+                fishById.set(definition.id, fish);
+                kois.push(fish);
+                if (releaseId === definition.id) releaseFish(fish);
+            } else {
+                fish.applyDefinition(definition);
+            }
+        }
+    }
+
+    const shell = document.createElement('aside');
+    shell.className = 'fish-manager';
+    shell.innerHTML = [
+        '<button class="fish-manager__toggle" type="button" hidden>🐟 我的鱼</button>',
+        '<section class="fish-manager__panel" aria-label="鱼设置">',
+        '<header class="fish-manager__header"><div><h1 class="fish-manager__title">🐟 鱼设置</h1><p class="fish-manager__hint">池塘只显示你添加的鱼，外观与状态自动保存到本地数据库</p></div><button class="fish-manager__close" type="button">收起</button></header>',
+        '<div class="fish-manager__layout">',
+        '<section class="fish-manager__card fish-manager__editor-card"><h2 class="fish-manager__section-title">加入一只鱼</h2><div class="fish-manager__form-grid">',
+        '<div class="fish-manager__field"><label>名字</label><input data-name maxlength="16" placeholder="给它起个名字"></div>',
+        '<div class="fish-manager__field"><label>鱼种</label><select data-breed></select></div>',
+        '<div class="fish-manager__field"><label>身体颜色</label><input data-color type="color"></div>',
+        '<div class="fish-manager__field"><label>整体大小 <span class="fish-manager__range-value" data-value="size"></span></label><input data-shape="size" type="range" min="0.55" max="1.65" step="0.05"></div>',
+        '<div class="fish-manager__field"><label>身体长度 <span class="fish-manager__range-value" data-value="bodyLen"></span></label><input data-shape="bodyLen" type="range" min="0.55" max="1.65" step="0.05"></div>',
+        '<div class="fish-manager__field"><label>身体宽度 <span class="fish-manager__range-value" data-value="bodyH"></span></label><input data-shape="bodyH" type="range" min="0.55" max="1.65" step="0.05"></div>',
+        '<div class="fish-manager__field"><label>头部宽度 <span class="fish-manager__range-value" data-value="headW"></span></label><input data-shape="headW" type="range" min="0.55" max="1.65" step="0.05"></div>',
+        '<div class="fish-manager__field"><label>尾鳍大小 <span class="fish-manager__range-value" data-value="tailFin"></span></label><input data-shape="tailFin" type="range" min="0.55" max="1.65" step="0.05"></div>',
+        '</div></section>',
+        '<section class="fish-manager__card fish-manager__list-card"><h2 class="fish-manager__section-title">我的鱼</h2><div class="fish-manager__list" data-list></div></section>',
+        '<section class="fish-manager__card fish-manager__board-card">',
+        '<div class="fish-manager__board-head"><div><h2 class="fish-manager__section-title">🎨 大画板</h2><span class="fish-manager__hint">直接在鱼身上手绘图案</span></div><div class="fish-manager__tools"><label>画笔</label><input data-brush-color type="color" value="#d94f28"><label>粗细</label><input data-brush-size type="range" min="3" max="48" value="18"><button class="fish-manager__button" data-clear type="button">清空图案</button></div></div>',
+        '<div class="fish-manager__canvas-wrap"><canvas class="fish-manager__canvas" data-board width="720" height="320"></canvas></div>',
+        '<p class="fish-manager__board-note">画板会按鱼的身体轮廓裁切；空白区域使用上方选择的身体颜色。</p>',
+        '<div class="fish-manager__actions"><button class="fish-manager__button fish-manager__button--primary" data-add type="button">加入池塘</button></div>',
+        '<p class="fish-manager__status" data-status role="status"></p>',
+        '</section></div></section>'
+    ].join('');
+    document.body.appendChild(shell);
+
+    const panel = shell.querySelector('.fish-manager__panel');
+    const toggle = shell.querySelector('.fish-manager__toggle');
+    const nameInput = shell.querySelector('[data-name]');
+    const breedInput = shell.querySelector('[data-breed]');
+    const colorInput = shell.querySelector('[data-color]');
+    const list = shell.querySelector('[data-list]');
+    const status = shell.querySelector('[data-status]');
+    const brushColor = shell.querySelector('[data-brush-color]');
+    const brushSize = shell.querySelector('[data-brush-size]');
+    const shapeInputs = Array.from(shell.querySelectorAll('[data-shape]'));
+    const board = shell.querySelector('[data-board]');
+    const boardContext = board.getContext('2d');
+    const paint = document.createElement('canvas');
+    paint.width = BOARD_W;
+    paint.height = BOARD_H;
+    const paintContext = paint.getContext('2d');
+    let drawing = false;
+
+    function randomBreed() {
+        const total = koiType.breeds.reduce((sum, breed) => sum + (breed.w || 1), 0);
+        let cursor = Math.random() * total;
+        for (const breed of koiType.breeds) {
+            cursor -= breed.w || 1;
+            if (cursor <= 0) return breed;
+        }
+        return koiType.breeds[0];
+    }
+
+    function randomShape(breed) {
+        const shape = { ...breed.shape };
+        for (const key of ['bodyLen', 'bodyH', 'headW', 'tailFin']) {
+            shape[key] = clamp((breed.shape?.[key] || 1) * (0.86 + Math.random() * 0.28), 0.55, 1.65);
+        }
+        return shape;
+    }
+
+    function randomSkin(color) {
+        const canvas = document.createElement('canvas');
+        canvas.width = BOARD_W;
+        canvas.height = BOARD_H;
+        const context = canvas.getContext('2d');
+        context.fillStyle = color;
+        context.fillRect(0, 0, BOARD_W, BOARD_H);
+
+        const accent = randomItem(INITIAL_COLOR_PALETTE);
+        const shadow = randomItem(INITIAL_COLOR_PALETTE);
+        const pattern = Math.floor(Math.random() * 3);
+        context.save();
+        context.globalAlpha = 0.42;
+        context.strokeStyle = accent;
+        context.fillStyle = accent;
+        if (pattern === 0) {
+            for (let index = 0; index < 7; index++) {
+                const x = 45 + Math.random() * 625;
+                const y = 42 + Math.random() * 236;
+                context.beginPath();
+                context.ellipse(x, y, 18 + Math.random() * 34, 9 + Math.random() * 20, Math.random() * Math.PI, 0, Math.PI * 2);
+                context.fill();
+            }
+        } else if (pattern === 1) {
+            context.lineWidth = 9 + Math.random() * 10;
+            for (let index = 0; index < 5; index++) {
+                const x = 60 + index * 145 + Math.random() * 38;
+                context.beginPath();
+                context.moveTo(x, 24);
+                context.quadraticCurveTo(x - 42, 160, x + 16, 296);
+                context.stroke();
+            }
         } else {
-            k.applyCustomDef(d);
+            context.lineWidth = 3;
+            for (let index = 0; index < 18; index++) {
+                const x = 28 + Math.random() * 664;
+                const y = 35 + Math.random() * 250;
+                context.beginPath();
+                context.arc(x, y, 8 + Math.random() * 13, Math.PI * 0.12, Math.PI * 0.88);
+                context.stroke();
+            }
         }
-    });
-}
-
-let lastCustomRaw = null;
-
-const RELEASE_KEY = 'koi.custom.release.v1';
-let lastReleaseRaw = '';
-
-function releaseFish(k) {
-    if (!k) return;
-    const cx = viewport.width * 0.5, cy = viewport.height * 0.5;
-    for (let i = 0; i < k.segments.length; i++) { k.segments[i].x = cx; k.segments[i].y = cy; }
-    k.x = cx; k.y = cy;
-    k.heading = Math.random() * Math.PI * 2;
-    k.angle = k.heading;
-    k.speed = 0;
-    k.depth = Math.max(0.45, k.depth);      // 别一入水就沉到底看不见
-    k.drop = { t: 0, dur: 1.05, splashed: false };
-    // 入水点先起一圈很淡的预兆(主涟漪在 update 里按进度冒)
-    spawnRipple(cx, cy, 0.8 * config.rippleStrength);
-}
-
-function checkRelease() {
-    let raw = null;
-    try { raw = repository.getRaw(RELEASE_KEY); } catch (e) { return; }
-    if (!raw || raw === lastReleaseRaw) return;
-    lastReleaseRaw = raw;
-    let msg = null;
-    try { msg = JSON.parse(raw); } catch (e) { return; }
-    // 陈旧的投放指令不要执行(否则每次刷新壁纸都会把鱼扔一次)
-    if (!msg || !msg.id || Date.now() - msg.t > 15000) return;
-    releaseFish(customKoiById.get(msg.id));
-}
-
-listen('storage', e => {
-    if (e.key === RELEASE_KEY) { loadCustomFishFromStore(); checkRelease(); }
-});
-
-function loadCustomFishFromStore() {
-    try {
-        const raw = repository.getRaw('koi.custom.fish.v1');
-        lastCustomRaw = raw;
-        const parsed = raw && JSON.parse(raw);
-        customDefs = Array.isArray(parsed?.list) ? parsed.list.filter(d => d && typeof d.id === 'string') : [];
-    } catch (e) {
-        customDefs = [];      // 存储不可用/内容坏了都不能把整池鱼拖垮
+        context.globalAlpha = 0.18;
+        context.fillStyle = shadow;
+        context.fillRect(0, 0, BOARD_W, 18 + Math.random() * 18);
+        context.restore();
+        return canvas.toDataURL('image/png');
     }
-    syncCustomFish();
+
+    function createInitialDefinitions() {
+        const colors = [];
+        const sameColorProbability = clamp(
+            config.initialSameColorProbability ?? INITIAL_SAME_COLOR_PROBABILITY,
+            0,
+            1
+        );
+        return Array.from({ length: INITIAL_FISH_COUNT }, (_, index) => {
+            const breed = randomBreed();
+            const reuseColor = colors.length > 0 && Math.random() < sameColorProbability;
+            let color = reuseColor ? randomItem(colors) : randomItem(INITIAL_COLOR_PALETTE);
+            if (!reuseColor && colors.length) {
+                let attempts = 0;
+                while (colors.includes(color) && attempts++ < 8) color = randomItem(INITIAL_COLOR_PALETTE);
+            }
+            colors.push(color);
+            const shape = randomShape(breed);
+            return {
+                id: makeId(),
+                name: breed.name + (index + 1),
+                breedId: breed.id,
+                color,
+                size: clamp((breed.size || 1) * (0.76 + Math.random() * 0.48), 0.55, 1.65),
+                shape,
+                skin: randomSkin(color),
+                hunger: 100,
+                mood: 100,
+                favorite: false,
+                createdAt: Date.now() + index
+            };
+        });
+    }
+
+    for (const breed of koiType.breeds) {
+        const option = document.createElement('option');
+        option.value = breed.id;
+        option.textContent = breed.name;
+        breedInput.appendChild(option);
+    }
+
+    const selectedBreed = () => breedById.get(breedInput.value) || koiType.breeds[0];
+    const input = key => shell.querySelector('[data-shape="' + key + '"]');
+
+    function updateRangeLabels() {
+        for (const item of shapeInputs) {
+            shell.querySelector('[data-value="' + item.dataset.shape + '"]').textContent = Number(item.value).toFixed(2);
+        }
+    }
+
+    function applyBreedDefaults(clearPaint = false) {
+        const breed = selectedBreed();
+        colorInput.value = breed.body;
+        input('size').value = clamp(breed.size || 1, 0.55, 1.65);
+        for (const key of ['bodyLen', 'bodyH', 'headW', 'tailFin']) {
+            input(key).value = clamp(breed.shape?.[key] || 1, 0.55, 1.65);
+        }
+        if (clearPaint) paintContext.clearRect(0, 0, BOARD_W, BOARD_H);
+        updateRangeLabels();
+        renderBoard();
+    }
+
+    function drawBoardBackground() {
+        const sourceX = 340;
+        const sourceY = 158;
+        const gradient = boardContext.createRadialGradient(sourceX, 148, 30, sourceX, 148, 430);
+        gradient.addColorStop(0, '#0f5e58');
+        gradient.addColorStop(0.58, '#0a4a46');
+        gradient.addColorStop(1, '#052f2d');
+        boardContext.fillStyle = gradient;
+        boardContext.fillRect(0, 0, BOARD_W, BOARD_H);
+
+        // Soft, continuous ripples travel out from a quiet source under the fish.
+        // Each ring has its own phase so the water never reads as a static target.
+        boardContext.save();
+        boardContext.globalCompositeOperation = 'screen';
+        const cycle = 360;
+        const travel = boardWaveTime * 48;
+        for (let index = 0; index < 5; index++) {
+            const progress = ((travel + index * 74) % cycle) / cycle;
+            const radius = 26 + progress * 420;
+            const fade = Math.pow(1 - progress, 1.35);
+            const alpha = 0.18 * fade;
+            boardContext.lineWidth = 1.1 + fade * 1.8;
+            boardContext.strokeStyle = `rgba(168,235,216,${alpha})`;
+            boardContext.beginPath();
+            boardContext.arc(sourceX, sourceY, radius, 0, Math.PI * 2);
+            boardContext.stroke();
+
+            // A short displaced highlight gives each ring a soft crest instead of
+            // a perfectly uniform vector circle.
+            boardContext.lineWidth = 0.8 + fade * 1.1;
+            boardContext.strokeStyle = `rgba(218,255,240,${alpha * 0.72})`;
+            boardContext.beginPath();
+            boardContext.arc(
+                sourceX - 2,
+                sourceY - 1,
+                radius + 2.5,
+                -Math.PI * 0.82 + progress * 0.28,
+                -Math.PI * 0.18 + progress * 0.28
+            );
+            boardContext.stroke();
+        }
+
+        // The source is deliberately subtle: it anchors the wave field without
+        // competing with the fish preview.
+        const sourceGlow = boardContext.createRadialGradient(sourceX, sourceY, 0, sourceX, sourceY, 38);
+        sourceGlow.addColorStop(0, 'rgba(206,255,239,.13)');
+        sourceGlow.addColorStop(1, 'rgba(206,255,239,0)');
+        boardContext.fillStyle = sourceGlow;
+        boardContext.beginPath();
+        boardContext.arc(sourceX, sourceY, 38, 0, Math.PI * 2);
+        boardContext.fill();
+        boardContext.restore();
+    }
+
+    function previewDefinition() {
+        const breed = selectedBreed();
+        return {
+            id: 'preview',
+            name: nameInput.value.trim() || breed.name,
+            breedId: breed.id,
+            color: colorInput.value,
+            size: Number(input('size').value),
+            shape: {
+                ...breed.shape,
+                bodyLen: Number(input('bodyLen').value),
+                bodyH: Number(input('bodyH').value),
+                headW: Number(input('headW').value),
+                tailFin: Number(input('tailFin').value)
+            },
+            skin: null,
+            hunger: 100,
+            mood: 100,
+            favorite: false
+        };
+    }
+
+    function preparePreviewFish() {
+        if (!previewFish) previewFish = new UserFish(previewDefinition());
+        else previewFish.applyDefinition(previewDefinition());
+
+        const size = Number(input('size').value);
+        previewFish.depth = 1;
+        previewFish.baseSizeMul = 0.82;
+        previewFish.sizeMul = previewFish.baseSizeMul * size;
+        const spacing = config.fishSize * previewFish.sizeMul * koiType.segmentSpacing;
+        for (let index = 0; index < previewFish.numSegments; index++) {
+            previewFish.segments[index].x = index * spacing;
+            previewFish.segments[index].y = 0;
+        }
+        previewFish.x = 0;
+        previewFish.y = 0;
+        previewFish.drop = null;
+        previewFish.speed = 0;
+        previewFish.angle = 0;
+        previewFish.heading = 0;
+        previewFish.skin = paint;
+        previewFish.skinReady = true;
+        previewFish.skinSrc = null;
+        previewFish.noseColor = colorInput.value;
+
+        const total = spacing * (previewFish.numSegments - 1);
+        // The editor preview is intentionally calmer than the pond animation.
+        // Keep the shared renderer, but reduce the spine wave and fin swing for a clear drawing target.
+        previewFish.waveEnv = total * 0.040;
+        previewFish.previewMotion = true;
+        const bodySpan = total * 0.78 * previewFish.shape.bodyLen;
+        const maxHalf = total * 0.78 * 0.168 * previewFish.shape.bodyH;
+        const noseDepth = KOI_SHAPE.shapeWidth(KOI_SHAPE.FRONT, previewFish.shape) * maxHalf * 0.95;
+        const tailLength = KOI_SHAPE.tailFinLen(maxHalf, previewFish.shape);
+        const width = noseDepth + bodySpan + tailLength;
+        const height = maxHalf * 3.1;
+        const scale = Math.min((BOARD_W - 84) / Math.max(1, width), (BOARD_H - 48) / Math.max(1, height));
+        previewTransform = {
+            scale,
+            x: (BOARD_W - width * scale) / 2 + noseDepth * scale,
+            y: BODY_CENTER,
+            total,
+            bodySpan,
+            maxHalf
+        };
+        return previewFish;
+    }
+
+    function renderBoard() {
+        drawBoardBackground();
+        const fish = preparePreviewFish();
+        boardContext.save();
+        boardContext.translate(previewTransform.x, previewTransform.y);
+        boardContext.scale(previewTransform.scale, previewTransform.scale);
+        fish.draw(boardContext);
+        boardContext.restore();
+    }
+
+    function exportSkin() {
+        const canvas = document.createElement('canvas');
+        canvas.width = BOARD_W;
+        canvas.height = BOARD_H;
+        const context = canvas.getContext('2d');
+        context.fillStyle = colorInput.value;
+        context.fillRect(0, 0, BOARD_W, BOARD_H);
+        context.drawImage(paint, 0, 0);
+        return canvas.toDataURL('image/png');
+    }
+
+    function boardPoint(event) {
+        const bounds = board.getBoundingClientRect();
+        const fish = preparePreviewFish();
+        const screenX = (event.clientX - bounds.left) * BOARD_W / bounds.width;
+        const screenY = (event.clientY - bounds.top) * BOARD_H / bounds.height;
+        const pointX = (screenX - previewTransform.x) / previewTransform.scale;
+        const pointY = (screenY - previewTransform.y) / previewTransform.scale;
+        const total = previewTransform.total;
+        const bodySpan = 0.78 * fish.shape.bodyLen;
+        const bodyPosition = pointX / Math.max(1, total * bodySpan);
+        const maxHalf = previewTransform.maxHalf;
+        const localHalf = KOI_SHAPE.shapeWidth(bodyPosition, fish.shape) * maxHalf;
+        const spinePosition = bodyPosition * bodySpan;
+        const waveOffset = Math.sin(
+            fish.swimCycle * fish.waveFreq - spinePosition * fish.waveLen
+        ) * fish.waveEnv * spinePosition * spinePosition;
+        return {
+            x: clamp(KOI_SHAPE.uAtBw(bodyPosition) * BOARD_W, 0, BOARD_W),
+            y: clamp((pointY - waveOffset + localHalf) / Math.max(1, localHalf * 2) * BOARD_H, 0, BOARD_H),
+            inside: bodyPosition >= KOI_SHAPE.FRONT && bodyPosition <= 1
+                && Math.abs(pointY - waveOffset) <= localHalf
+        };
+    }
+
+    function beginDrawing(event) {
+        const point = boardPoint(event);
+        if (!point.inside) return;
+        drawing = true;
+        board.setPointerCapture(event.pointerId);
+        paintContext.beginPath();
+        paintContext.moveTo(point.x, point.y);
+    }
+
+    function continueDrawing(event) {
+        if (!drawing) return;
+        const point = boardPoint(event);
+        if (!point.inside) {
+            paintContext.beginPath();
+            return;
+        }
+        paintContext.lineCap = 'round';
+        paintContext.lineJoin = 'round';
+        paintContext.strokeStyle = brushColor.value;
+        paintContext.lineWidth = Number(brushSize.value);
+        paintContext.lineTo(point.x, point.y);
+        paintContext.stroke();
+        renderBoard();
+    }
+
+    function addStat(container, label, value, displayedValue = Math.round(value) + '%') {
+        const row = document.createElement('div');
+        row.className = 'fish-manager__stat';
+        const title = document.createElement('span');
+        title.textContent = label;
+        const track = document.createElement('div');
+        track.className = 'fish-manager__track';
+        const fill = document.createElement('div');
+        fill.className = 'fish-manager__fill';
+        fill.style.width = clamp(value, 0, 100) + '%';
+        track.appendChild(fill);
+        const number = document.createElement('span');
+        number.className = 'fish-manager__value';
+        number.textContent = displayedValue;
+        row.append(title, track, number);
+        container.appendChild(row);
+    }
+
+    function moodEmoji(value) {
+        return value >= 75 ? '😊' : value >= 45 ? '🙂' : value >= 20 ? '😕' : '😢';
+    }
+
+    function renderList() {
+        list.replaceChildren();
+        if (!definitions.length) {
+            const empty = document.createElement('div');
+            empty.className = 'fish-manager__empty';
+            empty.textContent = '池塘现在是空的。\n设计并加入第一只鱼。';
+            list.appendChild(empty);
+            return;
+        }
+        const ordered = [...definitions].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+        for (const definition of ordered) {
+            const fish = fishById.get(definition.id);
+            const card = document.createElement('article');
+            card.className = 'fish-manager__fish';
+            const header = document.createElement('div');
+            header.className = 'fish-manager__fish-head';
+            const identity = document.createElement('div');
+            const fishName = document.createElement('div');
+            fishName.className = 'fish-manager__fish-name';
+            fishName.textContent = definition.name;
+            const kind = document.createElement('div');
+            kind.className = 'fish-manager__fish-kind';
+            kind.textContent = (breedById.get(definition.breedId)?.name || '淡水鱼') + ' · ' + definition.name;
+            identity.append(fishName, kind);
+            const favorite = document.createElement('button');
+            favorite.className = 'fish-manager__favorite';
+            favorite.type = 'button';
+            favorite.textContent = '★';
+            favorite.setAttribute('aria-label', '收藏');
+            favorite.setAttribute('aria-pressed', String(definition.favorite === true));
+            favorite.addEventListener('click', () => {
+                definition.favorite = !definition.favorite;
+                if (fish) fish.favorite = definition.favorite;
+                storeUserManaged = true;
+                saveDefinitions();
+                renderList();
+            });
+            header.append(identity, favorite);
+            card.appendChild(header);
+
+            const stats = document.createElement('div');
+            stats.className = 'fish-manager__stats';
+            const hunger = fish?.hunger ?? definition.hunger ?? 100;
+            const mood = fish?.mood ?? definition.mood ?? 100;
+            const speed = Math.max(0, Number(fish?.speed) || 0) * 60;
+            addStat(stats, '饱食度', hunger);
+            addStat(stats, '心情 ' + moodEmoji(mood), mood);
+            addStat(stats, '游速', Math.min(100, speed / 2.2), speed.toFixed(1));
+            card.appendChild(stats);
+
+            const actions = document.createElement('div');
+            actions.className = 'fish-manager__fish-actions';
+            const remove = document.createElement('button');
+            remove.className = 'fish-manager__button fish-manager__button--danger';
+            remove.type = 'button';
+            remove.textContent = '删除';
+            remove.addEventListener('click', () => {
+                definitions = definitions.filter(item => item.id !== definition.id);
+                storeUserManaged = true;
+                saveDefinitions();
+                syncFish();
+                renderList();
+                status.textContent = '已从池塘删除“' + definition.name + '”';
+            });
+            actions.appendChild(remove);
+            card.appendChild(actions);
+            list.appendChild(card);
+        }
+    }
+
+    function addFish() {
+        if (definitions.length >= MAX_FISH) {
+            status.textContent = '最多可以添加 ' + MAX_FISH + ' 只鱼';
+            return;
+        }
+        const breed = selectedBreed();
+        const name = nameInput.value.trim() || breed.name + (definitions.length + 1);
+        const definition = {
+            id: makeId(),
+            name,
+            breedId: breed.id,
+            color: colorInput.value,
+            size: Number(input('size').value),
+            shape: {
+                ...breed.shape,
+                bodyLen: Number(input('bodyLen').value),
+                bodyH: Number(input('bodyH').value),
+                headW: Number(input('headW').value),
+                tailFin: Number(input('tailFin').value)
+            },
+            skin: exportSkin(),
+            hunger: 100,
+            mood: 100,
+            favorite: false,
+            createdAt: Date.now()
+        };
+        definitions.push(definition);
+        storeUserManaged = true;
+        saveDefinitions();
+        syncFish(definition.id);
+        renderList();
+        nameInput.value = '';
+        status.textContent = '“' + name + '”已经加入池塘并保存';
+    }
+
+    function setOpen(open) {
+        panel.hidden = !open;
+        toggle.hidden = open;
+        if (open) renderBoard();
+    }
+
+    breedInput.addEventListener('change', () => applyBreedDefaults(false));
+    colorInput.addEventListener('input', renderBoard);
+    for (const shapeInput of shapeInputs) {
+        shapeInput.addEventListener('input', () => { updateRangeLabels(); renderBoard(); });
+    }
+    board.addEventListener('pointerdown', beginDrawing);
+    board.addEventListener('pointermove', continueDrawing);
+    board.addEventListener('pointerup', () => { drawing = false; });
+    board.addEventListener('pointercancel', () => { drawing = false; });
+    shell.querySelector('[data-clear]').addEventListener('click', () => {
+        paintContext.clearRect(0, 0, BOARD_W, BOARD_H);
+        renderBoard();
+    });
+    shell.querySelector('[data-add]').addEventListener('click', addFish);
+    shell.querySelector('.fish-manager__close').addEventListener('click', () => setOpen(false));
+    toggle.addEventListener('click', () => setOpen(true));
+
+    loadDefinitions();
+    if (!definitions.length && !storeUserManaged) {
+        definitions = createInitialDefinitions();
+        saveDefinitions();
+    }
+    syncFish();
+    applyBreedDefaults(true);
+    renderList();
+    status.textContent = definitions.length
+        ? '已从本地数据库恢复 ' + definitions.length + ' 只鱼'
+        : '池塘已清空，请添加第一只鱼';
+
+    return {
+        loadCustomFishFromStore() { loadDefinitions(); syncFish(); renderList(); },
+        syncCustomFish: syncFish,
+        update(dt) {
+            statsElapsed += dt;
+            saveElapsed += dt;
+            if (!panel.hidden) boardWaveTime += dt;
+            if (previewFish && !panel.hidden) {
+                if (!drawing) previewFish.swimCycle += 2.65 * dt;
+                renderBoard();
+            }
+            if (statsElapsed >= 1) {
+                statsElapsed = 0;
+                for (const fish of fishById.values()) {
+                    fish.hunger = clamp(fish.hunger - 0.02, 0, 100);
+                    const targetMood = 30 + fish.hunger * 0.7;
+                    fish.mood = clamp(fish.mood + (targetMood - fish.mood) * 0.025, 0, 100);
+                }
+                renderList();
+            }
+            if (saveElapsed >= 5) {
+                saveElapsed = 0;
+                saveDefinitions();
+            }
+        },
+        dispose() {
+            saveDefinitions();
+            previewFish = null;
+            shell.remove();
+            for (let index = kois.length - 1; index >= 0; index--) {
+                if (kois[index].custom) kois.splice(index, 1);
+            }
+            fishById.clear();
+        }
+    };
 }
 
-// 编辑器保存后自动同步:同源跨窗口的 storage 事件
-listen('storage', e => {
-    if (e.key === 'koi.custom.fish.v1') loadCustomFishFromStore();
-});
-
-const poll = setInterval(() => {
-    try {
-        if (repository.getRaw('koi.custom.fish.v1') !== lastCustomRaw) loadCustomFishFromStore();
-    } catch (e) {  }
-    checkRelease();
-}, 2000);
-
-return { syncCustomFish, loadCustomFishFromStore, releaseFish, dispose() { clearInterval(poll); for (const [n, f] of listeners) window.removeEventListener(n, f); for (let i = kois.length - 1; i >= 0; i--) if (kois[i].custom) kois.splice(i, 1); customKoiById.clear(); } };
-}
-
-Object.assign(exports, { createCustomFish });
+Object.assign(exports, { createFishManager });
 };
 __modules["src/features/weather.js"] = function (exports, __require) {
 const { createRainRipples } = __require("src/render/ripples.js");
@@ -4323,6 +5174,9 @@ const SHAPE_DEFAULTS = Object.freeze({
     eye: 1
 });
 
+const STORE_KEY = 'koi.debug.fish.v1';
+const DEFAULT_FISH_SIZE = 2.2;
+
 const RANGE_LABELS = Object.freeze({
     fishSize: '整体大小',
     fishSpeed: '游动速度',
@@ -4391,11 +5245,12 @@ function rangeField(key, min, max, step, value) {
         '</div>'
     ].join('');
 }
-function createFishDebugPanel({ kois, config, types }) {
+function createFishDebugPanel({ kois, config, types, repository }) {
     addStyles();
 
     const fishType = types.get('koi');
-    const originalFishSize = config.fishSize;
+    const originalFishSize = Number.isFinite(Number(config.fishSize)) ? config.fishSize : DEFAULT_FISH_SIZE;
+    config.fishSize = originalFishSize;
     const originalMotion = {
         fishSpeed: config.fishSpeed,
         motionTurnRadius: config.motionTurnRadius ?? 1,
@@ -4409,14 +5264,14 @@ function createFishDebugPanel({ kois, config, types }) {
         '<button class="fish-debug__toggle" type="button" aria-expanded="true" hidden>鱼外观</button>',
         '<section class="fish-debug__panel">',
         '<header class="fish-debug__head">',
-        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">实时应用到池中全部普通锦鲤 · 按 D 显示或隐藏</p></div>',
+        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">10 种中国常见淡水鱼 · 按 D 显示或隐藏</p></div>',
         '<button class="fish-debug__close" type="button">收起</button>',
         '</header>',
         '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">品种</legend>',
-        '<select class="fish-debug__select" data-breed aria-label="选择锦鲤品种"><option value="mixed">混合随机</option></select>',
+        '<select class="fish-debug__select" data-breed aria-label="选择淡水鱼种"><option value="mixed">10 种混合</option></select>',
         '</fieldset>',
         '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">尺寸与轮廓</legend>',
-        rangeField('fishSize', 0.5, 3, 0.05, config.fishSize),
+        rangeField('fishSize', 0.5, 3, 0.05, originalFishSize),
         rangeField('bodyLen', 0.35, 2.2, 0.05, 1),
         rangeField('bodyH', 0.35, 2.2, 0.05, 1),
         rangeField('headW', 0.35, 2.2, 0.05, 1),
@@ -4518,13 +5373,29 @@ function createFishDebugPanel({ kois, config, types }) {
         output.value = JSON.stringify(currentParameters(), null, 2);
     }
 
+    function save() {
+        repository.write(STORE_KEY, currentParameters());
+    }
+
+    function setSavedInput(key, value) {
+        const input = inputFor(key);
+        if (!input) return;
+        if (input.type === 'color') {
+            if (/^#[0-9a-f]{6}$/i.test(value)) input.value = value;
+            return;
+        }
+        const number = Number(value);
+        if (!Number.isFinite(number)) return;
+        input.value = Math.max(Number(input.min), Math.min(Number(input.max), number));
+    }
+
     function updateRangeLabel(input) {
         if (input.type !== 'range') return;
         const target = shell.querySelector('[data-output="' + input.dataset.key + '"]');
         if (target) target.value = Number(input.value).toFixed(2);
     }
 
-    function applyInput(input) {
+    function applyInput(input, persist = true) {
         const key = input.dataset.key;
         const value = input.type === 'color' ? input.value : Number(input.value);
         const fish = ordinaryFish();
@@ -4549,12 +5420,15 @@ function createFishDebugPanel({ kois, config, types }) {
 
         updateRangeLabel(input);
         refreshOutput();
-        status.textContent = '已应用到 ' + fish.length + ' 条锦鲤';
+        if (persist) save();
+        status.textContent = '已应用到 ' + fish.length + ' 条普通鱼';
     }
 
     function syncFromFirstFish() {
         const first = ordinaryFish()[0];
         if (!first) return;
+        const firstShape = { ...SHAPE_DEFAULTS, ...(first.shape || {}) };
+        for (const key of Object.keys(SHAPE_DEFAULTS)) inputFor(key).value = firstShape[key];
         inputFor('bodyColor').value = first.color || '#eee8dc';
         const firstSpot = first.spotRanges && first.spotRanges[0];
         if (firstSpot) {
@@ -4568,7 +5442,7 @@ function createFishDebugPanel({ kois, config, types }) {
         refreshOutput();
     }
 
-    function changeBreed() {
+    function changeBreed(persist = true) {
         const fish = ordinaryFish();
         const selected = fishType.breeds.find(item => item.id === breed.value);
         for (const koi of fish) {
@@ -4576,7 +5450,29 @@ function createFishDebugPanel({ kois, config, types }) {
             else koi.pickBreed();
         }
         syncFromFirstFish();
+        if (persist) save();
         status.textContent = selected ? '已切换为“' + selected.name + '”' : '已重新随机分配品种';
+    }
+
+    function restoreSaved() {
+        const saved = repository.read(STORE_KEY, null);
+        if (!saved || typeof saved !== 'object') return false;
+        const validBreed = saved.breed === 'mixed' || fishType.breeds.some(item => item.id === saved.breed);
+        breed.value = validBreed ? saved.breed : 'mixed';
+        changeBreed(false);
+        setSavedInput('fishSize', saved.fishSize);
+        setSavedInput('fishSpeed', saved.motion?.fishSpeed);
+        setSavedInput('motionTurnRadius', saved.motion?.turnRadius);
+        setSavedInput('motionTurnResponse', saved.motion?.turnResponse);
+        setSavedInput('motionCruiseCurve', saved.motion?.cruiseCurve);
+        for (const key of Object.keys(SHAPE_DEFAULTS)) setSavedInput(key, saved.shape?.[key]);
+        for (const key of ['bodyColor', 'spotColor', 'spotWidth', 'outlineWidth', 'net', 'sheen']) {
+            setSavedInput(key, saved[key]);
+        }
+        for (const input of inputs) applyInput(input, false);
+        refreshOutput();
+        status.textContent = '已恢复上次保存的鱼群参数';
+        return true;
     }
 
     function reset() {
@@ -4595,6 +5491,7 @@ function createFishDebugPanel({ kois, config, types }) {
             koi.pickBreed();
         }
         syncFromFirstFish();
+        save();
         status.textContent = '已恢复全部默认参数';
     }
 
@@ -4676,6 +5573,7 @@ function createFishDebugPanel({ kois, config, types }) {
     status.textContent = '面板已就绪';
 
     return {
+        restoreSaved,
         dispose() {
             clearInterval(motionTimer);
             window.removeEventListener('keydown', onKeyDown);
@@ -4688,6 +5586,8 @@ Object.assign(exports, { createFishDebugPanel });
 };
 __modules["src/ui/ripple-debug-panel.js"] = function (exports, __require) {
 const { THEME } = __require("src/shared/legacy-assets.js");
+const STORE_KEY = 'koi.debug.ripple.v1';
+
 function addStyles() {
     if (document.getElementById('ripple-debug-panel-styles')) return;
     const style = document.createElement('style');
@@ -4732,7 +5632,7 @@ function rangeField(key, label, min, max, step, value) {
         '</div>'
     ].join('');
 }
-function createRippleDebugPanel({ config, viewport, spawnRipple }) {
+function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
     addStyles();
     const T = THEME.water.ripple;
     const clamp = value => Math.max(0, Math.min(1, value));
@@ -4783,6 +5683,13 @@ function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         }
     };
     const original = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()]));
+    const saved = repository.read(STORE_KEY, null);
+    if (saved && typeof saved === 'object') {
+        for (const [key, field] of Object.entries(fields)) {
+            const value = Number(saved[key]);
+            if (Number.isFinite(value)) field.set(Math.max(field.min, Math.min(field.max, value)));
+        }
+    }
     const group = keys => keys.map(key => {
         const field = fields[key];
         return rangeField(key, field.label, field.min, field.max, field.step, field.get());
@@ -4845,6 +5752,12 @@ function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         }, null, 2);
     }
 
+    function save() {
+        repository.write(STORE_KEY, Object.fromEntries(
+            Object.entries(fields).map(([key, field]) => [key, field.get()])
+        ));
+    }
+
     function testRipple() {
         spawnRipple(viewport.width * 0.5, viewport.height * 0.5, 1.5 * config.rippleStrength);
         status.textContent = '已在画面中心生成测试波纹';
@@ -4853,6 +5766,7 @@ function createRippleDebugPanel({ config, viewport, spawnRipple }) {
     function reset() {
         for (const [key, value] of Object.entries(original)) fields[key].set(value);
         refresh();
+        save();
         testRipple();
         status.textContent = '已恢复默认参数并生成测试波纹';
     }
@@ -4884,6 +5798,7 @@ function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         const key = input.dataset.key;
         fields[key].set(Number(input.value));
         refresh();
+        save();
         status.textContent = '参数已实时应用；点击“中心测试波纹”查看完整扩散过程';
     });
     shell.querySelector('[data-test]').addEventListener('click', testRipple);
@@ -4893,7 +5808,7 @@ function createRippleDebugPanel({ config, viewport, spawnRipple }) {
     toggle.addEventListener('click', () => setOpen(true));
     window.addEventListener('keydown', onKeyDown);
     refresh();
-    status.textContent = '面板已就绪';
+    status.textContent = saved ? '已恢复上次保存的波纹参数' : '面板已就绪';
 
     return {
         dispose() {
@@ -4907,6 +5822,8 @@ Object.assign(exports, { createRippleDebugPanel });
 };
 __modules["src/ui/clock-debug-panel.js"] = function (exports, __require) {
 const { THEME } = __require("src/shared/legacy-assets.js");
+const STORE_KEY = 'koi.debug.clock.v1';
+
 function addStyles() {
     if (document.getElementById('clock-debug-panel-styles')) return;
     const style = document.createElement('style');
@@ -4931,6 +5848,12 @@ function addStyles() {
         '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
         '.clock-debug__field input[type="color"]{width:48px;height:30px;padding:2px;border:1px solid rgba(208,235,225,.25);border-radius:7px;background:#102b28;cursor:pointer}',
         '.clock-debug__field input[type="checkbox"]{width:18px;height:18px;accent-color:#76cdb0}',
+        '.clock-debug__palettes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 14px}',
+        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
+        '.clock-debug__palette[aria-pressed="true"]{border-color:#8bdbc0;box-shadow:0 0 0 2px rgba(139,219,192,.20)}',
+        '.clock-debug__palette-swatch{position:relative;width:28px;height:28px;border:1px solid rgba(255,255,255,.42);border-radius:7px;background:var(--palette-bg);box-shadow:inset 0 1px rgba(255,255,255,.35)}',
+        '.clock-debug__palette-swatch::after{content:"Aa";position:absolute;inset:0;display:grid;place-items:center;color:var(--palette-fg);font:700 10px/1 system-ui,sans-serif}',
+        '.clock-debug__palette-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
         '.clock-debug__select{grid-column:1/-1;width:100%;height:38px;padding:0 10px;border:1px solid rgba(208,235,225,.24);border-radius:8px;background:#102b28;color:#eef8f4}',
         '.clock-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.clock-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
@@ -4966,18 +5889,34 @@ function rgba(hex, alpha) {
     const n = parseInt(hex.slice(1), 16);
     return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha.toFixed(3) + ')';
 }
-function createClockDebugPanel() {
+function createClockDebugPanel({ repository }) {
     addStyles();
     const T = THEME.clock;
     const parsed = parseColor(T.color);
     let colorHex = parsed.hex;
     let colorAlpha = parsed.alpha;
+    const cardTextParsed = parseColor(T.cardTextColor);
+    let cardTextHex = cardTextParsed.hex;
+    let cardTextAlpha = cardTextParsed.alpha;
+    let cardTintHex = parseColor(T.cardTint || '#d7e2d1').hex;
     const fonts = {
         yahei: '"Microsoft YaHei", "PingFang SC", system-ui, sans-serif',
         system: 'system-ui, sans-serif',
         serif: 'Georgia, "Times New Roman", serif',
         mono: 'Consolas, "SFMono-Regular", monospace'
     };
+    const palettes = [
+        { id: 'lotus-mist', name: '荷叶雾', bg: '#d7e2d1', text: '#1a433b' },
+        { id: 'moon-water', name: '月光水', bg: '#dbe9e9', text: '#234c55' },
+        { id: 'warm-jade', name: '暖玉', bg: '#eadfc8', text: '#5a4431' },
+        { id: 'lotus-pink', name: '莲粉', bg: '#ead9dc', text: '#64404a' },
+        { id: 'deep-pond', name: '深潭', bg: '#31534d', text: '#f0f5e9' },
+        { id: 'night-blue', name: '夜蓝', bg: '#354b5f', text: '#f2f7f5' }
+    ];
+    const paletteMarkup = palettes.map(palette =>
+        '<button class="clock-debug__palette" type="button" data-palette="' + palette.id + '" aria-pressed="false" style="--palette-bg:' + palette.bg + ';--palette-fg:' + palette.text + '">' +
+        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span></button>'
+    ).join('');
     let fontId = Object.keys(fonts).find(key => fonts[key] === T.font) || 'yahei';
     const fields = {
         timeSize: { label: '时间大小', min: 0.03, max: 0.15, step: 0.005, get: () => T.timeSize, set: v => { T.timeSize = v; } },
@@ -4986,15 +5925,46 @@ function createClockDebugPanel() {
         marginY: { label: '垂直边距', min: 0, max: 0.25, step: 0.005, get: () => T.marginY, set: v => { T.marginY = v; } },
         gap: { label: '时间日期间距', min: 0.05, max: 0.8, step: 0.01, get: () => T.gap, set: v => { T.gap = v; } },
         weight: { label: '字体粗细', min: 300, max: 800, step: 100, get: () => T.weight || 600, set: v => { T.weight = Math.round(v); } },
-        opacity: { label: '文字透明度', min: 0.1, max: 1, step: 0.01, get: () => colorAlpha, set: v => { colorAlpha = v; T.color = rgba(colorHex, colorAlpha); } },
+        opacity: { label: '普通字体透明度', min: 0.1, max: 1, step: 0.01, get: () => colorAlpha, set: v => { colorAlpha = v; T.color = rgba(colorHex, colorAlpha); } },
+        dropletStrength: { label: '玻璃水滴质感', min: 0.2, max: 1.8, step: 0.05, get: () => T.dropletStrength ?? 0.3, set: v => { T.dropletStrength = v; } },
+        cardOpacity: { label: '卡片透明度', min: 0.05, max: 0.8, step: 0.01, get: () => T.cardOpacity ?? 0.45, set: v => { T.cardOpacity = v; } },
+        cardTextOpacity: { label: '卡片字体透明度', min: 0.1, max: 1, step: 0.01, get: () => cardTextAlpha, set: v => { cardTextAlpha = v; T.cardTextColor = rgba(cardTextHex, cardTextAlpha); } },
+        cardBlur: { label: '背景模糊', min: 0, max: 0.04, step: 0.001, get: () => T.cardBlur ?? 0.012, set: v => { T.cardBlur = v; } },
+        cardRadius: { label: '卡片圆角', min: 0.003, max: 0.06, step: 0.001, get: () => T.cardRadius ?? 0.022, set: v => { T.cardRadius = v; } },
+        cardShadow: { label: '卡片阴影', min: 0, max: 0.7, step: 0.01, get: () => T.cardShadow ?? 0.34, set: v => { T.cardShadow = v; } },
         shadowAlpha: { label: '阴影强度', min: 0, max: 1, step: 0.01, get: () => T.shadowAlpha, set: v => { T.shadowAlpha = v; } },
         shadowBlur: { label: '阴影模糊', min: 0, max: 0.08, step: 0.001, get: () => T.shadowBlur, set: v => { T.shadowBlur = v; } },
         shadowOffset: { label: '阴影距离', min: 0, max: 0.04, step: 0.001, get: () => T.shadowOffset, set: v => { T.shadowOffset = v; } }
     };
     const original = {
         fields: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()])),
-        show: T.show, anchor: T.anchor, colorHex, fontId
+        show: T.show, anchor: T.anchor, colorHex, fontId,
+        cardTextHex, cardTintHex,
+        droplet: T.droplet === true, cardGlass: T.cardGlass === true,
+        foreground: T.foreground === true
     };
+    const saved = repository.read(STORE_KEY, null);
+    if (saved && typeof saved === 'object') {
+        if (/^#[0-9a-f]{6}$/i.test(saved.colorHex)) colorHex = saved.colorHex;
+        if (/^#[0-9a-f]{6}$/i.test(saved.cardTextHex)) cardTextHex = saved.cardTextHex;
+        if (/^#[0-9a-f]{6}$/i.test(saved.cardTintHex)) cardTintHex = saved.cardTintHex;
+        if (Object.prototype.hasOwnProperty.call(fonts, saved.fontId)) fontId = saved.fontId;
+        if (typeof saved.show === 'boolean') T.show = saved.show;
+        if (typeof saved.foreground === 'boolean') T.foreground = saved.foreground;
+        if (typeof saved.droplet === 'boolean') T.droplet = saved.droplet;
+        if (typeof saved.cardGlass === 'boolean') T.cardGlass = saved.cardGlass;
+        if (['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'].includes(saved.anchor)) T.anchor = saved.anchor;
+        if (saved.fields && typeof saved.fields === 'object') {
+            for (const [key, field] of Object.entries(fields)) {
+                const value = Number(saved.fields[key]);
+                if (Number.isFinite(value)) field.set(Math.max(field.min, Math.min(field.max, value)));
+            }
+        }
+        T.font = fonts[fontId];
+        T.color = rgba(colorHex, colorAlpha);
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardTint = cardTintHex;
+    }
     const group = keys => keys.map(key => {
         const field = fields[key];
         return rangeField(key, field.label, field.min, field.max, field.step, field.get());
@@ -5009,6 +5979,7 @@ function createClockDebugPanel() {
         '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟 · 按 T 显示或隐藏</p></div><button class="clock-debug__close" type="button">收起</button></header>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">显示与位置</legend>',
         '<div class="clock-debug__field"><label for="clock-debug-show">显示时间</label><input id="clock-debug-show" data-show type="checkbox"></div>',
+        '<div class="clock-debug__field"><label for="clock-debug-foreground">时间置于鱼上方</label><input id="clock-debug-foreground" data-foreground type="checkbox"></div>',
         '<div class="clock-debug__field"><label for="clock-debug-anchor">位置</label><select id="clock-debug-anchor" class="clock-debug__select" data-anchor>' +
             '<option value="top-left">左上</option><option value="top-center">上方居中</option><option value="top-right">右上</option>' +
             '<option value="bottom-left">左下</option><option value="bottom-center">下方居中</option><option value="bottom-right">右下</option></select></div>',
@@ -5017,7 +5988,14 @@ function createClockDebugPanel() {
         '<div class="clock-debug__field"><label for="clock-debug-font">字体</label><select id="clock-debug-font" class="clock-debug__select" data-font>' +
             '<option value="yahei">微软雅黑</option><option value="system">系统字体</option><option value="serif">衬线字体</option><option value="mono">等宽字体</option></select></div>',
         '<div class="clock-debug__field"><label for="clock-debug-color">文字颜色</label><input id="clock-debug-color" data-color type="color"></div>',
-        group(['timeSize', 'dateSize', 'gap', 'weight', 'opacity']), '</fieldset>',
+        '<div class="clock-debug__field"><label for="clock-debug-droplet">水滴字体</label><input id="clock-debug-droplet" data-droplet type="checkbox"></div>',
+        group(['dropletStrength', 'timeSize', 'dateSize', 'gap', 'weight', 'opacity']), '</fieldset>',
+        '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">卡片毛玻璃</legend>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-glass">开启毛玻璃卡片</label><input id="clock-debug-card-glass" data-card-glass type="checkbox"></div>',
+        '<div class="clock-debug__palettes" role="group" aria-label="卡片配色预设">', paletteMarkup, '</div>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-tint">卡片色调</label><input id="clock-debug-card-tint" data-card-tint type="color"></div>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-text-color">卡片字体颜色</label><input id="clock-debug-card-text-color" data-card-text-color type="color"></div>',
+        group(['cardTextOpacity', 'cardOpacity', 'cardBlur', 'cardRadius', 'cardShadow']), '</fieldset>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">阴影</legend>',
         group(['shadowAlpha', 'shadowBlur', 'shadowOffset']), '</fieldset>',
         '<div class="clock-debug__actions"><button class="clock-debug__button" type="button" data-reset>恢复默认</button><button class="clock-debug__button clock-debug__button--primary" type="button" data-copy>复制参数</button></div>',
@@ -5033,9 +6011,15 @@ function createClockDebugPanel() {
     const output = shell.querySelector('.clock-debug__output');
     const status = shell.querySelector('.clock-debug__status');
     const showInput = shell.querySelector('[data-show]');
+    const foregroundInput = shell.querySelector('[data-foreground]');
     const anchorInput = shell.querySelector('[data-anchor]');
     const fontInput = shell.querySelector('[data-font]');
     const colorInput = shell.querySelector('[data-color]');
+    const dropletInput = shell.querySelector('[data-droplet]');
+    const cardGlassInput = shell.querySelector('[data-card-glass]');
+    const cardTintInput = shell.querySelector('[data-card-tint]');
+    const cardTextColorInput = shell.querySelector('[data-card-text-color]');
+    const paletteButtons = Array.from(shell.querySelectorAll('[data-palette]'));
     const inputs = Array.from(shell.querySelectorAll('[data-key]'));
 
     function format(key, value) {
@@ -5046,31 +6030,69 @@ function createClockDebugPanel() {
 
     function refresh() {
         showInput.checked = T.show !== false;
+        foregroundInput.checked = T.foreground === true;
         anchorInput.value = T.anchor;
         fontInput.value = fontId;
         colorInput.value = colorHex;
+        dropletInput.checked = T.droplet === true;
+        cardGlassInput.checked = T.cardGlass === true;
+        cardTintInput.value = cardTintHex;
+        cardTextColorInput.value = cardTextHex;
+        for (const button of paletteButtons) {
+            const palette = palettes.find(item => item.id === button.dataset.palette);
+            button.setAttribute('aria-pressed', String(cardTintHex.toLowerCase() === palette.bg && cardTextHex.toLowerCase() === palette.text));
+        }
         for (const input of inputs) {
             const key = input.dataset.key;
             input.value = fields[key].get();
             shell.querySelector('[data-output="' + key + '"]').value = format(key, fields[key].get());
         }
         output.value = JSON.stringify({
-            show: T.show, anchor: T.anchor, marginX: T.marginX, marginY: T.marginY,
+            show: T.show, foreground: T.foreground === true,
+            anchor: T.anchor, marginX: T.marginX, marginY: T.marginY,
             timeSize: T.timeSize, dateSize: T.dateSize, gap: T.gap,
             color: T.color, font: T.font, weight: T.weight || 600,
+            droplet: T.droplet === true, dropletStrength: T.dropletStrength,
+            cardGlass: T.cardGlass === true,
+            cardTint: T.cardTint, cardTextColor: T.cardTextColor,
+            cardOpacity: T.cardOpacity, cardBlur: T.cardBlur,
+            cardRadius: T.cardRadius, cardShadow: T.cardShadow,
             shadowAlpha: T.shadowAlpha, shadowBlur: T.shadowBlur, shadowOffset: T.shadowOffset
         }, null, 2);
+    }
+
+    function save() {
+        repository.write(STORE_KEY, {
+            fields: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()])),
+            show: T.show !== false,
+            foreground: T.foreground === true,
+            anchor: T.anchor,
+            fontId,
+            colorHex,
+            droplet: T.droplet === true,
+            cardGlass: T.cardGlass === true,
+            cardTintHex,
+            cardTextHex
+        });
     }
 
     function reset() {
         for (const [key, value] of Object.entries(original.fields)) fields[key].set(value);
         T.show = original.show;
         T.anchor = original.anchor;
+        T.foreground = original.foreground;
+        T.droplet = original.droplet;
+        T.cardGlass = original.cardGlass;
         colorHex = original.colorHex;
+        cardTextHex = original.cardTextHex;
+        cardTintHex = original.cardTintHex;
         fontId = original.fontId;
         T.font = fonts[fontId];
         T.color = rgba(colorHex, colorAlpha);
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardTint = cardTintHex;
         refresh();
+        save();
         status.textContent = '已恢复默认时间样式';
     }
 
@@ -5099,19 +6121,61 @@ function createClockDebugPanel() {
     for (const input of inputs) input.addEventListener('input', () => {
         fields[input.dataset.key].set(Number(input.value));
         refresh();
+        save();
         status.textContent = '时间样式已实时应用';
     });
-    showInput.addEventListener('change', () => { T.show = showInput.checked; refresh(); });
-    anchorInput.addEventListener('change', () => { T.anchor = anchorInput.value; refresh(); });
-    fontInput.addEventListener('change', () => { fontId = fontInput.value; T.font = fonts[fontId]; refresh(); });
-    colorInput.addEventListener('input', () => { colorHex = colorInput.value; T.color = rgba(colorHex, colorAlpha); refresh(); });
+    showInput.addEventListener('change', () => { T.show = showInput.checked; refresh(); save(); });
+    foregroundInput.addEventListener('change', () => {
+        T.foreground = foregroundInput.checked;
+        refresh();
+        save();
+        status.textContent = foregroundInput.checked ? '时间已置于鱼群上方' : '鱼群可从时间上方游过';
+    });
+    anchorInput.addEventListener('change', () => { T.anchor = anchorInput.value; refresh(); save(); });
+    fontInput.addEventListener('change', () => { fontId = fontInput.value; T.font = fonts[fontId]; refresh(); save(); });
+    colorInput.addEventListener('input', () => { colorHex = colorInput.value; T.color = rgba(colorHex, colorAlpha); refresh(); save(); });
+    dropletInput.addEventListener('change', () => {
+        T.droplet = dropletInput.checked;
+        refresh();
+        save();
+        status.textContent = dropletInput.checked ? '已开启水滴字体' : '已恢复普通字体';
+    });
+    cardGlassInput.addEventListener('change', () => {
+        T.cardGlass = cardGlassInput.checked;
+        refresh();
+        save();
+        status.textContent = cardGlassInput.checked ? '已开启卡片毛玻璃' : '已关闭卡片毛玻璃';
+    });
+    cardTintInput.addEventListener('input', () => {
+        cardTintHex = cardTintInput.value;
+        T.cardTint = cardTintHex;
+        refresh();
+        save();
+    });
+    cardTextColorInput.addEventListener('input', () => {
+        cardTextHex = cardTextColorInput.value;
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        refresh();
+        save();
+    });
+    for (const button of paletteButtons) button.addEventListener('click', () => {
+        const palette = palettes.find(item => item.id === button.dataset.palette);
+        cardTintHex = palette.bg;
+        cardTextHex = palette.text;
+        T.cardTint = cardTintHex;
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardGlass = true;
+        refresh();
+        save();
+        status.textContent = '已应用「' + palette.name + '」配色';
+    });
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
     close.addEventListener('click', () => setOpen(false));
     toggle.addEventListener('click', () => setOpen(true));
     window.addEventListener('keydown', onKeyDown);
     refresh();
-    status.textContent = '面板已就绪';
+    status.textContent = saved ? '已恢复上次保存的时间样式' : '面板已就绪';
 
     return { dispose() { window.removeEventListener('keydown', onKeyDown); shell.remove(); } };
 }

@@ -3,7 +3,7 @@ import { SOLO_RATIO } from './schools.js';
 
 // Fixed 12-point spine in this renderer. New skeletons require a new renderer/controller.
 export const KOI_TYPE = {
-    id: 'koi', name: '锦鲤', segmentSpacing: 5,
+    id: 'koi', name: '中国淡水鱼', segmentSpacing: 5,
     shape: null, speedMultiplier: 1, turnRadius: 2.5,
     soloRatio: SOLO_RATIO, collisionRadius: 0.115, collisionEnd: 9,
     breeds: KOI_BREEDS

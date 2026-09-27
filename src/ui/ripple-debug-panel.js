@@ -1,5 +1,7 @@
 import { THEME } from '../shared/legacy-assets.js';
 
+const STORE_KEY = 'koi.debug.ripple.v1';
+
 function addStyles() {
     if (document.getElementById('ripple-debug-panel-styles')) return;
     const style = document.createElement('style');
@@ -45,7 +47,7 @@ function rangeField(key, label, min, max, step, value) {
     ].join('');
 }
 
-export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
+export function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
     addStyles();
     const T = THEME.water.ripple;
     const clamp = value => Math.max(0, Math.min(1, value));
@@ -96,6 +98,13 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         }
     };
     const original = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()]));
+    const saved = repository.read(STORE_KEY, null);
+    if (saved && typeof saved === 'object') {
+        for (const [key, field] of Object.entries(fields)) {
+            const value = Number(saved[key]);
+            if (Number.isFinite(value)) field.set(Math.max(field.min, Math.min(field.max, value)));
+        }
+    }
     const group = keys => keys.map(key => {
         const field = fields[key];
         return rangeField(key, field.label, field.min, field.max, field.step, field.get());
@@ -158,6 +167,12 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         }, null, 2);
     }
 
+    function save() {
+        repository.write(STORE_KEY, Object.fromEntries(
+            Object.entries(fields).map(([key, field]) => [key, field.get()])
+        ));
+    }
+
     function testRipple() {
         spawnRipple(viewport.width * 0.5, viewport.height * 0.5, 1.5 * config.rippleStrength);
         status.textContent = '已在画面中心生成测试波纹';
@@ -166,6 +181,7 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
     function reset() {
         for (const [key, value] of Object.entries(original)) fields[key].set(value);
         refresh();
+        save();
         testRipple();
         status.textContent = '已恢复默认参数并生成测试波纹';
     }
@@ -197,6 +213,7 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
         const key = input.dataset.key;
         fields[key].set(Number(input.value));
         refresh();
+        save();
         status.textContent = '参数已实时应用；点击“中心测试波纹”查看完整扩散过程';
     });
     shell.querySelector('[data-test]').addEventListener('click', testRipple);
@@ -206,7 +223,7 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple }) {
     toggle.addEventListener('click', () => setOpen(true));
     window.addEventListener('keydown', onKeyDown);
     refresh();
-    status.textContent = '面板已就绪';
+    status.textContent = saved ? '已恢复上次保存的波纹参数' : '面板已就绪';
 
     return {
         dispose() {

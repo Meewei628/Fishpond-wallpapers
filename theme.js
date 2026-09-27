@@ -266,6 +266,7 @@ const THEME = {
      * bottom-left/bottom-center/bottom-right。 */
     clock: {
         show: true,
+        foreground: false,       // false: 鱼可盖住时间；true: 时间与卡片始终在鱼上方
         anchor: 'top-right',
         marginX: 0.05,          // 相对画面宽
         marginY: 0.105,        // 让开右上角那个「自定义鱼」入口         // 相对画面高
@@ -273,6 +274,15 @@ const THEME = {
         dateSize: 0.34,         // 相对时间字号的倍率
         weight: 600,            // 时间字重；日期自动比它轻 200
         color: 'rgba(244,252,248,0.94)',   // 暖白偏青:像水面反光,不是 UI 文字
+        droplet: false,          // 水滴字体：液态融合轮廓 + 透明玻璃字面 + 方向折射边
+        dropletStrength: 0.3,
+        cardGlass: false,        // 时间背后的局部模糊毛玻璃卡片
+        cardOpacity: 0.45,
+        cardBlur: 0.012,
+        cardRadius: 0.022,
+        cardShadow: 0.34,
+        cardTint: '#d7e2d1',
+        cardTextColor: 'rgba(26,67,59,0.88)',
         shadow: 'rgba(8,34,36,',           // 影子基色(后面接 alpha)
         shadowAlpha: 0.62,
         shadowBlur: 0.040,      // 相对短边:糊一点才像水里的暗,不像描边

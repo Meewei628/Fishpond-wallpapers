@@ -43,7 +43,11 @@ export function buildSmoothNormals(at, N, win) {
 }
 
 export function drawSkinOnBody(ctx, at, BS, W, maxHalf, img, nose, noseW, capDepth) {
-    const TW = img.naturalWidth, TH = img.naturalHeight;
+    // HTMLImageElement uses naturalWidth/naturalHeight; the live editor passes an
+    // HTMLCanvasElement so brush strokes can appear without encoding/reloading an image.
+    const TW = img.naturalWidth || img.width;
+    const TH = img.naturalHeight || img.height;
+    if (!(TW > 0 && TH > 0)) return;
 
     const K = 40;
 

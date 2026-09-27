@@ -62,6 +62,7 @@ export function createPondApp(canvas) {
         onAfterSync: () => features.get('customFish')?.syncCustomFish?.()
     });
     population.syncStock();
+    features.get('fishDebugPanel')?.restoreSaved?.();
     features.get('customFish')?.loadCustomFishFromStore?.();
 
     const { resolveFishCollisions } = createCollisions({ kois, config });

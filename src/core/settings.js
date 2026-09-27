@@ -1,7 +1,10 @@
 export const DEFAULT_SETTINGS = {
     // 独立网页版使用这里的默认值。
     // 被改成 0 的那次,页面上就只剩一个空池塘(宿主会推值 ≠ 默认值可以随便设)。
-    fishCount: 80,
+    // 普通库存鱼保持关闭；首次打开程序时由“我的鱼”面板生成初始鱼。
+    fishCount: 0,
+    // 首次自动生成鱼时，复用已有颜色的概率(0~1)。
+    initialSameColorProbability: 0.28,
 
     useGpuCaustics: true,
     useGpuRipples: true,
@@ -15,7 +18,7 @@ export const DEFAULT_SETTINGS = {
     enableCaustics: true,
     enableFeeding: true,
     shyFish: true,
-    fishSize: 1.45,
+    fishSize: 2.2,
     rippleStrength: 0.7,
 
     // 天气(2026-09-26):0=晴 1=雨(阴天已按用户决定摘掉)。**数字下标**——

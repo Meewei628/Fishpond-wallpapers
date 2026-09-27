@@ -19,7 +19,7 @@ function collect(id) {
     if (modules.has(id)) return;
 
     const filename = path.join(root, ...id.split('/'));
-    let code = fs.readFileSync(filename, 'utf8');
+    let code = fs.readFileSync(filename, 'utf8').replace(/\r\n/g, '\n');
     const dependencies = [];
 
     code = code.replace(

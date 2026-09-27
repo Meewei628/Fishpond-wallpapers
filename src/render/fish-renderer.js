@@ -13,7 +13,7 @@ const koiWidth = KOI_SHAPE.koiWidth;
 const traceClosedSmooth = KOI_SHAPE.traceClosedSmooth;
 
 export function createFishRenderer({ config }) {
-const FISH_SCALES = false;
+const FISH_SCALES = true;
 function drawFish(ctx) {
         let dropAlpha = 1;
 
@@ -206,7 +206,7 @@ function drawFish(ctx) {
         bodyGrad.addColorStop(0.78, shadeColor(ab, -0.14 * con));
         bodyGrad.addColorStop(1.00, shadeColor(ab, -0.30 * con));    // 背光面
         bodyPath();
-        if (this.skinReady && this.skin && this.skin.naturalWidth) {
+        if (this.skinReady && this.skin && (this.skin.naturalWidth || this.skin.width)) {
 
             ctx.save();
             ctx.clip();                       // bodyPath() 刚 beginPath,直接裁在体轮廓里
@@ -297,7 +297,8 @@ function drawFish(ctx) {
         //   原来一律白 + 一律深,所以像印上去的纹理,没有立体感。
         // ★ 头、腹、尾要淡出 —— 真鱼这几个部位是光的(腹部尤其)。
 
-        const SCALE_MIN_HALF = 14;
+        // 小鱼不画独立鳞片，避免 80 条鱼时产生大量看不见的细碎描边。
+        const SCALE_MIN_HALF = 9;
         if (FISH_SCALES && this.net > 0.012 && maxHalf >= SCALE_MIN_HALF) {
             const ROWS = 13;
             const rowGap = (BODY_SPAN / (ROWS + 1)) * total;       // 列间距(px)
@@ -398,7 +399,7 @@ function drawFish(ctx) {
             // 两片鳍向前盖在身体上成了一层灰膜 —— 这就是"鳍没连到鱼腹"的根因。
             const P = KOI_SHAPE.PECTORAL;
             let ang = Math.atan2(pf.ty, pf.tx) + sgn * P.spread
-                    + Math.sin(this.swimCycle * P.flapFreq) * P.flapAmp;
+                    + Math.sin(this.swimCycle * P.flapFreq) * P.flapAmp * (this.previewMotion ? 0.42 : 1);
             let fl = KOI_SHAPE.pectoralFinLen(maxHalf, this.shape);
             ctx.save();
             ctx.translate(bx, by);
@@ -422,7 +423,8 @@ function drawFish(ctx) {
         let pedW = W(1.0) * maxHalf;
 
         let tAng = Math.atan2(tp.ty, tp.tx)
-                 + Math.sin(this.swimCycle * this.waveFreq - this.waveLen) * KOI_SHAPE.TAIL.anglePhase;
+                 + Math.sin(this.swimCycle * this.waveFreq - this.waveLen)
+                 * KOI_SHAPE.TAIL.anglePhase * (this.previewMotion ? 0.42 : 1);
         let tl = KOI_SHAPE.tailFinLen(maxHalf, this.shape);
         ctx.save();
         ctx.translate(tp.x, tp.y);

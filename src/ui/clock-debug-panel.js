@@ -1,5 +1,7 @@
 import { THEME } from '../shared/legacy-assets.js';
 
+const STORE_KEY = 'koi.debug.clock.v1';
+
 function addStyles() {
     if (document.getElementById('clock-debug-panel-styles')) return;
     const style = document.createElement('style');
@@ -24,6 +26,12 @@ function addStyles() {
         '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
         '.clock-debug__field input[type="color"]{width:48px;height:30px;padding:2px;border:1px solid rgba(208,235,225,.25);border-radius:7px;background:#102b28;cursor:pointer}',
         '.clock-debug__field input[type="checkbox"]{width:18px;height:18px;accent-color:#76cdb0}',
+        '.clock-debug__palettes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 14px}',
+        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
+        '.clock-debug__palette[aria-pressed="true"]{border-color:#8bdbc0;box-shadow:0 0 0 2px rgba(139,219,192,.20)}',
+        '.clock-debug__palette-swatch{position:relative;width:28px;height:28px;border:1px solid rgba(255,255,255,.42);border-radius:7px;background:var(--palette-bg);box-shadow:inset 0 1px rgba(255,255,255,.35)}',
+        '.clock-debug__palette-swatch::after{content:"Aa";position:absolute;inset:0;display:grid;place-items:center;color:var(--palette-fg);font:700 10px/1 system-ui,sans-serif}',
+        '.clock-debug__palette-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
         '.clock-debug__select{grid-column:1/-1;width:100%;height:38px;padding:0 10px;border:1px solid rgba(208,235,225,.24);border-radius:8px;background:#102b28;color:#eef8f4}',
         '.clock-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.clock-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
@@ -60,18 +68,34 @@ function rgba(hex, alpha) {
     return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha.toFixed(3) + ')';
 }
 
-export function createClockDebugPanel() {
+export function createClockDebugPanel({ repository }) {
     addStyles();
     const T = THEME.clock;
     const parsed = parseColor(T.color);
     let colorHex = parsed.hex;
     let colorAlpha = parsed.alpha;
+    const cardTextParsed = parseColor(T.cardTextColor);
+    let cardTextHex = cardTextParsed.hex;
+    let cardTextAlpha = cardTextParsed.alpha;
+    let cardTintHex = parseColor(T.cardTint || '#d7e2d1').hex;
     const fonts = {
         yahei: '"Microsoft YaHei", "PingFang SC", system-ui, sans-serif',
         system: 'system-ui, sans-serif',
         serif: 'Georgia, "Times New Roman", serif',
         mono: 'Consolas, "SFMono-Regular", monospace'
     };
+    const palettes = [
+        { id: 'lotus-mist', name: '荷叶雾', bg: '#d7e2d1', text: '#1a433b' },
+        { id: 'moon-water', name: '月光水', bg: '#dbe9e9', text: '#234c55' },
+        { id: 'warm-jade', name: '暖玉', bg: '#eadfc8', text: '#5a4431' },
+        { id: 'lotus-pink', name: '莲粉', bg: '#ead9dc', text: '#64404a' },
+        { id: 'deep-pond', name: '深潭', bg: '#31534d', text: '#f0f5e9' },
+        { id: 'night-blue', name: '夜蓝', bg: '#354b5f', text: '#f2f7f5' }
+    ];
+    const paletteMarkup = palettes.map(palette =>
+        '<button class="clock-debug__palette" type="button" data-palette="' + palette.id + '" aria-pressed="false" style="--palette-bg:' + palette.bg + ';--palette-fg:' + palette.text + '">' +
+        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span></button>'
+    ).join('');
     let fontId = Object.keys(fonts).find(key => fonts[key] === T.font) || 'yahei';
     const fields = {
         timeSize: { label: '时间大小', min: 0.03, max: 0.15, step: 0.005, get: () => T.timeSize, set: v => { T.timeSize = v; } },
@@ -80,15 +104,46 @@ export function createClockDebugPanel() {
         marginY: { label: '垂直边距', min: 0, max: 0.25, step: 0.005, get: () => T.marginY, set: v => { T.marginY = v; } },
         gap: { label: '时间日期间距', min: 0.05, max: 0.8, step: 0.01, get: () => T.gap, set: v => { T.gap = v; } },
         weight: { label: '字体粗细', min: 300, max: 800, step: 100, get: () => T.weight || 600, set: v => { T.weight = Math.round(v); } },
-        opacity: { label: '文字透明度', min: 0.1, max: 1, step: 0.01, get: () => colorAlpha, set: v => { colorAlpha = v; T.color = rgba(colorHex, colorAlpha); } },
+        opacity: { label: '普通字体透明度', min: 0.1, max: 1, step: 0.01, get: () => colorAlpha, set: v => { colorAlpha = v; T.color = rgba(colorHex, colorAlpha); } },
+        dropletStrength: { label: '玻璃水滴质感', min: 0.2, max: 1.8, step: 0.05, get: () => T.dropletStrength ?? 0.3, set: v => { T.dropletStrength = v; } },
+        cardOpacity: { label: '卡片透明度', min: 0.05, max: 0.8, step: 0.01, get: () => T.cardOpacity ?? 0.45, set: v => { T.cardOpacity = v; } },
+        cardTextOpacity: { label: '卡片字体透明度', min: 0.1, max: 1, step: 0.01, get: () => cardTextAlpha, set: v => { cardTextAlpha = v; T.cardTextColor = rgba(cardTextHex, cardTextAlpha); } },
+        cardBlur: { label: '背景模糊', min: 0, max: 0.04, step: 0.001, get: () => T.cardBlur ?? 0.012, set: v => { T.cardBlur = v; } },
+        cardRadius: { label: '卡片圆角', min: 0.003, max: 0.06, step: 0.001, get: () => T.cardRadius ?? 0.022, set: v => { T.cardRadius = v; } },
+        cardShadow: { label: '卡片阴影', min: 0, max: 0.7, step: 0.01, get: () => T.cardShadow ?? 0.34, set: v => { T.cardShadow = v; } },
         shadowAlpha: { label: '阴影强度', min: 0, max: 1, step: 0.01, get: () => T.shadowAlpha, set: v => { T.shadowAlpha = v; } },
         shadowBlur: { label: '阴影模糊', min: 0, max: 0.08, step: 0.001, get: () => T.shadowBlur, set: v => { T.shadowBlur = v; } },
         shadowOffset: { label: '阴影距离', min: 0, max: 0.04, step: 0.001, get: () => T.shadowOffset, set: v => { T.shadowOffset = v; } }
     };
     const original = {
         fields: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()])),
-        show: T.show, anchor: T.anchor, colorHex, fontId
+        show: T.show, anchor: T.anchor, colorHex, fontId,
+        cardTextHex, cardTintHex,
+        droplet: T.droplet === true, cardGlass: T.cardGlass === true,
+        foreground: T.foreground === true
     };
+    const saved = repository.read(STORE_KEY, null);
+    if (saved && typeof saved === 'object') {
+        if (/^#[0-9a-f]{6}$/i.test(saved.colorHex)) colorHex = saved.colorHex;
+        if (/^#[0-9a-f]{6}$/i.test(saved.cardTextHex)) cardTextHex = saved.cardTextHex;
+        if (/^#[0-9a-f]{6}$/i.test(saved.cardTintHex)) cardTintHex = saved.cardTintHex;
+        if (Object.prototype.hasOwnProperty.call(fonts, saved.fontId)) fontId = saved.fontId;
+        if (typeof saved.show === 'boolean') T.show = saved.show;
+        if (typeof saved.foreground === 'boolean') T.foreground = saved.foreground;
+        if (typeof saved.droplet === 'boolean') T.droplet = saved.droplet;
+        if (typeof saved.cardGlass === 'boolean') T.cardGlass = saved.cardGlass;
+        if (['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'].includes(saved.anchor)) T.anchor = saved.anchor;
+        if (saved.fields && typeof saved.fields === 'object') {
+            for (const [key, field] of Object.entries(fields)) {
+                const value = Number(saved.fields[key]);
+                if (Number.isFinite(value)) field.set(Math.max(field.min, Math.min(field.max, value)));
+            }
+        }
+        T.font = fonts[fontId];
+        T.color = rgba(colorHex, colorAlpha);
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardTint = cardTintHex;
+    }
     const group = keys => keys.map(key => {
         const field = fields[key];
         return rangeField(key, field.label, field.min, field.max, field.step, field.get());
@@ -103,6 +158,7 @@ export function createClockDebugPanel() {
         '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟 · 按 T 显示或隐藏</p></div><button class="clock-debug__close" type="button">收起</button></header>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">显示与位置</legend>',
         '<div class="clock-debug__field"><label for="clock-debug-show">显示时间</label><input id="clock-debug-show" data-show type="checkbox"></div>',
+        '<div class="clock-debug__field"><label for="clock-debug-foreground">时间置于鱼上方</label><input id="clock-debug-foreground" data-foreground type="checkbox"></div>',
         '<div class="clock-debug__field"><label for="clock-debug-anchor">位置</label><select id="clock-debug-anchor" class="clock-debug__select" data-anchor>' +
             '<option value="top-left">左上</option><option value="top-center">上方居中</option><option value="top-right">右上</option>' +
             '<option value="bottom-left">左下</option><option value="bottom-center">下方居中</option><option value="bottom-right">右下</option></select></div>',
@@ -111,7 +167,14 @@ export function createClockDebugPanel() {
         '<div class="clock-debug__field"><label for="clock-debug-font">字体</label><select id="clock-debug-font" class="clock-debug__select" data-font>' +
             '<option value="yahei">微软雅黑</option><option value="system">系统字体</option><option value="serif">衬线字体</option><option value="mono">等宽字体</option></select></div>',
         '<div class="clock-debug__field"><label for="clock-debug-color">文字颜色</label><input id="clock-debug-color" data-color type="color"></div>',
-        group(['timeSize', 'dateSize', 'gap', 'weight', 'opacity']), '</fieldset>',
+        '<div class="clock-debug__field"><label for="clock-debug-droplet">水滴字体</label><input id="clock-debug-droplet" data-droplet type="checkbox"></div>',
+        group(['dropletStrength', 'timeSize', 'dateSize', 'gap', 'weight', 'opacity']), '</fieldset>',
+        '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">卡片毛玻璃</legend>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-glass">开启毛玻璃卡片</label><input id="clock-debug-card-glass" data-card-glass type="checkbox"></div>',
+        '<div class="clock-debug__palettes" role="group" aria-label="卡片配色预设">', paletteMarkup, '</div>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-tint">卡片色调</label><input id="clock-debug-card-tint" data-card-tint type="color"></div>',
+        '<div class="clock-debug__field"><label for="clock-debug-card-text-color">卡片字体颜色</label><input id="clock-debug-card-text-color" data-card-text-color type="color"></div>',
+        group(['cardTextOpacity', 'cardOpacity', 'cardBlur', 'cardRadius', 'cardShadow']), '</fieldset>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">阴影</legend>',
         group(['shadowAlpha', 'shadowBlur', 'shadowOffset']), '</fieldset>',
         '<div class="clock-debug__actions"><button class="clock-debug__button" type="button" data-reset>恢复默认</button><button class="clock-debug__button clock-debug__button--primary" type="button" data-copy>复制参数</button></div>',
@@ -127,9 +190,15 @@ export function createClockDebugPanel() {
     const output = shell.querySelector('.clock-debug__output');
     const status = shell.querySelector('.clock-debug__status');
     const showInput = shell.querySelector('[data-show]');
+    const foregroundInput = shell.querySelector('[data-foreground]');
     const anchorInput = shell.querySelector('[data-anchor]');
     const fontInput = shell.querySelector('[data-font]');
     const colorInput = shell.querySelector('[data-color]');
+    const dropletInput = shell.querySelector('[data-droplet]');
+    const cardGlassInput = shell.querySelector('[data-card-glass]');
+    const cardTintInput = shell.querySelector('[data-card-tint]');
+    const cardTextColorInput = shell.querySelector('[data-card-text-color]');
+    const paletteButtons = Array.from(shell.querySelectorAll('[data-palette]'));
     const inputs = Array.from(shell.querySelectorAll('[data-key]'));
 
     function format(key, value) {
@@ -140,31 +209,69 @@ export function createClockDebugPanel() {
 
     function refresh() {
         showInput.checked = T.show !== false;
+        foregroundInput.checked = T.foreground === true;
         anchorInput.value = T.anchor;
         fontInput.value = fontId;
         colorInput.value = colorHex;
+        dropletInput.checked = T.droplet === true;
+        cardGlassInput.checked = T.cardGlass === true;
+        cardTintInput.value = cardTintHex;
+        cardTextColorInput.value = cardTextHex;
+        for (const button of paletteButtons) {
+            const palette = palettes.find(item => item.id === button.dataset.palette);
+            button.setAttribute('aria-pressed', String(cardTintHex.toLowerCase() === palette.bg && cardTextHex.toLowerCase() === palette.text));
+        }
         for (const input of inputs) {
             const key = input.dataset.key;
             input.value = fields[key].get();
             shell.querySelector('[data-output="' + key + '"]').value = format(key, fields[key].get());
         }
         output.value = JSON.stringify({
-            show: T.show, anchor: T.anchor, marginX: T.marginX, marginY: T.marginY,
+            show: T.show, foreground: T.foreground === true,
+            anchor: T.anchor, marginX: T.marginX, marginY: T.marginY,
             timeSize: T.timeSize, dateSize: T.dateSize, gap: T.gap,
             color: T.color, font: T.font, weight: T.weight || 600,
+            droplet: T.droplet === true, dropletStrength: T.dropletStrength,
+            cardGlass: T.cardGlass === true,
+            cardTint: T.cardTint, cardTextColor: T.cardTextColor,
+            cardOpacity: T.cardOpacity, cardBlur: T.cardBlur,
+            cardRadius: T.cardRadius, cardShadow: T.cardShadow,
             shadowAlpha: T.shadowAlpha, shadowBlur: T.shadowBlur, shadowOffset: T.shadowOffset
         }, null, 2);
+    }
+
+    function save() {
+        repository.write(STORE_KEY, {
+            fields: Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.get()])),
+            show: T.show !== false,
+            foreground: T.foreground === true,
+            anchor: T.anchor,
+            fontId,
+            colorHex,
+            droplet: T.droplet === true,
+            cardGlass: T.cardGlass === true,
+            cardTintHex,
+            cardTextHex
+        });
     }
 
     function reset() {
         for (const [key, value] of Object.entries(original.fields)) fields[key].set(value);
         T.show = original.show;
         T.anchor = original.anchor;
+        T.foreground = original.foreground;
+        T.droplet = original.droplet;
+        T.cardGlass = original.cardGlass;
         colorHex = original.colorHex;
+        cardTextHex = original.cardTextHex;
+        cardTintHex = original.cardTintHex;
         fontId = original.fontId;
         T.font = fonts[fontId];
         T.color = rgba(colorHex, colorAlpha);
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardTint = cardTintHex;
         refresh();
+        save();
         status.textContent = '已恢复默认时间样式';
     }
 
@@ -193,19 +300,61 @@ export function createClockDebugPanel() {
     for (const input of inputs) input.addEventListener('input', () => {
         fields[input.dataset.key].set(Number(input.value));
         refresh();
+        save();
         status.textContent = '时间样式已实时应用';
     });
-    showInput.addEventListener('change', () => { T.show = showInput.checked; refresh(); });
-    anchorInput.addEventListener('change', () => { T.anchor = anchorInput.value; refresh(); });
-    fontInput.addEventListener('change', () => { fontId = fontInput.value; T.font = fonts[fontId]; refresh(); });
-    colorInput.addEventListener('input', () => { colorHex = colorInput.value; T.color = rgba(colorHex, colorAlpha); refresh(); });
+    showInput.addEventListener('change', () => { T.show = showInput.checked; refresh(); save(); });
+    foregroundInput.addEventListener('change', () => {
+        T.foreground = foregroundInput.checked;
+        refresh();
+        save();
+        status.textContent = foregroundInput.checked ? '时间已置于鱼群上方' : '鱼群可从时间上方游过';
+    });
+    anchorInput.addEventListener('change', () => { T.anchor = anchorInput.value; refresh(); save(); });
+    fontInput.addEventListener('change', () => { fontId = fontInput.value; T.font = fonts[fontId]; refresh(); save(); });
+    colorInput.addEventListener('input', () => { colorHex = colorInput.value; T.color = rgba(colorHex, colorAlpha); refresh(); save(); });
+    dropletInput.addEventListener('change', () => {
+        T.droplet = dropletInput.checked;
+        refresh();
+        save();
+        status.textContent = dropletInput.checked ? '已开启水滴字体' : '已恢复普通字体';
+    });
+    cardGlassInput.addEventListener('change', () => {
+        T.cardGlass = cardGlassInput.checked;
+        refresh();
+        save();
+        status.textContent = cardGlassInput.checked ? '已开启卡片毛玻璃' : '已关闭卡片毛玻璃';
+    });
+    cardTintInput.addEventListener('input', () => {
+        cardTintHex = cardTintInput.value;
+        T.cardTint = cardTintHex;
+        refresh();
+        save();
+    });
+    cardTextColorInput.addEventListener('input', () => {
+        cardTextHex = cardTextColorInput.value;
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        refresh();
+        save();
+    });
+    for (const button of paletteButtons) button.addEventListener('click', () => {
+        const palette = palettes.find(item => item.id === button.dataset.palette);
+        cardTintHex = palette.bg;
+        cardTextHex = palette.text;
+        T.cardTint = cardTintHex;
+        T.cardTextColor = rgba(cardTextHex, cardTextAlpha);
+        T.cardGlass = true;
+        refresh();
+        save();
+        status.textContent = '已应用「' + palette.name + '」配色';
+    });
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
     close.addEventListener('click', () => setOpen(false));
     toggle.addEventListener('click', () => setOpen(true));
     window.addEventListener('keydown', onKeyDown);
     refresh();
-    status.textContent = '面板已就绪';
+    status.textContent = saved ? '已恢复上次保存的时间样式' : '面板已就绪';
 
     return { dispose() { window.removeEventListener('keydown', onKeyDown); shell.remove(); } };
 }

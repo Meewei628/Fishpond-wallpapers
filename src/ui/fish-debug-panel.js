@@ -8,6 +8,9 @@ const SHAPE_DEFAULTS = Object.freeze({
     eye: 1
 });
 
+const STORE_KEY = 'koi.debug.fish.v1';
+const DEFAULT_FISH_SIZE = 2.2;
+
 const RANGE_LABELS = Object.freeze({
     fishSize: '整体大小',
     fishSpeed: '游动速度',
@@ -77,11 +80,12 @@ function rangeField(key, min, max, step, value) {
     ].join('');
 }
 
-export function createFishDebugPanel({ kois, config, types }) {
+export function createFishDebugPanel({ kois, config, types, repository }) {
     addStyles();
 
     const fishType = types.get('koi');
-    const originalFishSize = config.fishSize;
+    const originalFishSize = Number.isFinite(Number(config.fishSize)) ? config.fishSize : DEFAULT_FISH_SIZE;
+    config.fishSize = originalFishSize;
     const originalMotion = {
         fishSpeed: config.fishSpeed,
         motionTurnRadius: config.motionTurnRadius ?? 1,
@@ -95,14 +99,14 @@ export function createFishDebugPanel({ kois, config, types }) {
         '<button class="fish-debug__toggle" type="button" aria-expanded="true" hidden>鱼外观</button>',
         '<section class="fish-debug__panel">',
         '<header class="fish-debug__head">',
-        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">实时应用到池中全部普通锦鲤 · 按 D 显示或隐藏</p></div>',
+        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">10 种中国常见淡水鱼 · 按 D 显示或隐藏</p></div>',
         '<button class="fish-debug__close" type="button">收起</button>',
         '</header>',
         '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">品种</legend>',
-        '<select class="fish-debug__select" data-breed aria-label="选择锦鲤品种"><option value="mixed">混合随机</option></select>',
+        '<select class="fish-debug__select" data-breed aria-label="选择淡水鱼种"><option value="mixed">10 种混合</option></select>',
         '</fieldset>',
         '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">尺寸与轮廓</legend>',
-        rangeField('fishSize', 0.5, 3, 0.05, config.fishSize),
+        rangeField('fishSize', 0.5, 3, 0.05, originalFishSize),
         rangeField('bodyLen', 0.35, 2.2, 0.05, 1),
         rangeField('bodyH', 0.35, 2.2, 0.05, 1),
         rangeField('headW', 0.35, 2.2, 0.05, 1),
@@ -204,13 +208,29 @@ export function createFishDebugPanel({ kois, config, types }) {
         output.value = JSON.stringify(currentParameters(), null, 2);
     }
 
+    function save() {
+        repository.write(STORE_KEY, currentParameters());
+    }
+
+    function setSavedInput(key, value) {
+        const input = inputFor(key);
+        if (!input) return;
+        if (input.type === 'color') {
+            if (/^#[0-9a-f]{6}$/i.test(value)) input.value = value;
+            return;
+        }
+        const number = Number(value);
+        if (!Number.isFinite(number)) return;
+        input.value = Math.max(Number(input.min), Math.min(Number(input.max), number));
+    }
+
     function updateRangeLabel(input) {
         if (input.type !== 'range') return;
         const target = shell.querySelector('[data-output="' + input.dataset.key + '"]');
         if (target) target.value = Number(input.value).toFixed(2);
     }
 
-    function applyInput(input) {
+    function applyInput(input, persist = true) {
         const key = input.dataset.key;
         const value = input.type === 'color' ? input.value : Number(input.value);
         const fish = ordinaryFish();
@@ -235,12 +255,15 @@ export function createFishDebugPanel({ kois, config, types }) {
 
         updateRangeLabel(input);
         refreshOutput();
-        status.textContent = '已应用到 ' + fish.length + ' 条锦鲤';
+        if (persist) save();
+        status.textContent = '已应用到 ' + fish.length + ' 条普通鱼';
     }
 
     function syncFromFirstFish() {
         const first = ordinaryFish()[0];
         if (!first) return;
+        const firstShape = { ...SHAPE_DEFAULTS, ...(first.shape || {}) };
+        for (const key of Object.keys(SHAPE_DEFAULTS)) inputFor(key).value = firstShape[key];
         inputFor('bodyColor').value = first.color || '#eee8dc';
         const firstSpot = first.spotRanges && first.spotRanges[0];
         if (firstSpot) {
@@ -254,7 +277,7 @@ export function createFishDebugPanel({ kois, config, types }) {
         refreshOutput();
     }
 
-    function changeBreed() {
+    function changeBreed(persist = true) {
         const fish = ordinaryFish();
         const selected = fishType.breeds.find(item => item.id === breed.value);
         for (const koi of fish) {
@@ -262,7 +285,29 @@ export function createFishDebugPanel({ kois, config, types }) {
             else koi.pickBreed();
         }
         syncFromFirstFish();
+        if (persist) save();
         status.textContent = selected ? '已切换为“' + selected.name + '”' : '已重新随机分配品种';
+    }
+
+    function restoreSaved() {
+        const saved = repository.read(STORE_KEY, null);
+        if (!saved || typeof saved !== 'object') return false;
+        const validBreed = saved.breed === 'mixed' || fishType.breeds.some(item => item.id === saved.breed);
+        breed.value = validBreed ? saved.breed : 'mixed';
+        changeBreed(false);
+        setSavedInput('fishSize', saved.fishSize);
+        setSavedInput('fishSpeed', saved.motion?.fishSpeed);
+        setSavedInput('motionTurnRadius', saved.motion?.turnRadius);
+        setSavedInput('motionTurnResponse', saved.motion?.turnResponse);
+        setSavedInput('motionCruiseCurve', saved.motion?.cruiseCurve);
+        for (const key of Object.keys(SHAPE_DEFAULTS)) setSavedInput(key, saved.shape?.[key]);
+        for (const key of ['bodyColor', 'spotColor', 'spotWidth', 'outlineWidth', 'net', 'sheen']) {
+            setSavedInput(key, saved[key]);
+        }
+        for (const input of inputs) applyInput(input, false);
+        refreshOutput();
+        status.textContent = '已恢复上次保存的鱼群参数';
+        return true;
     }
 
     function reset() {
@@ -281,6 +326,7 @@ export function createFishDebugPanel({ kois, config, types }) {
             koi.pickBreed();
         }
         syncFromFirstFish();
+        save();
         status.textContent = '已恢复全部默认参数';
     }
 
@@ -362,6 +408,7 @@ export function createFishDebugPanel({ kois, config, types }) {
     status.textContent = '面板已就绪';
 
     return {
+        restoreSaved,
         dispose() {
             clearInterval(motionTimer);
             window.removeEventListener('keydown', onKeyDown);

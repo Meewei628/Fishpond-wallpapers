@@ -10,30 +10,33 @@
 import { createKoiCreature } from './pond/creatures/koi-fish.js';
 import { createClock } from './features/clock.js';
 import { createFeeding } from './features/feeding.js';
-import { createCustomFish } from './features/custom-fish.js';
+import { createFishManager } from './features/fish-manager.js';
 import { createWeather } from './features/weather.js';
 import { createIdleDrift } from './features/idle-drift.js';
 import { createDayCycle } from './features/day-cycle.js';
 import { createFishDebugPanel } from './ui/fish-debug-panel.js';
 import { createRippleDebugPanel } from './ui/ripple-debug-panel.js';
 import { createClockDebugPanel } from './ui/clock-debug-panel.js';
+import { THEME } from './shared/legacy-assets.js';
 
 export function registerBuiltins({ creatures, features, context }) {
-    // ── 生物:锦鲤(默认 kind,鱼种不声明 creature 时用它) ──
-    // 锦鲤这个 kind 的依赖(context 里的学校/渲染器)由装配层提供,但"它是谁"由这份清单决定
+    // ── 生物:中国淡水鱼(复用既有分节身体与群游控制器) ──
     const koiKind = createKoiCreature({
         config: context.config, viewport: context.viewport, time: context.time, kois: context.kois,
         foods: context.foods, mouse: context.mouse, spawnRipple: context.spawnRipple,
         schoolSystem: context.schoolSystem, drawFish: context.drawFish
     });
-    creatures.register({ id: 'koi-fish', title: '锦鲤', create: koiKind.create, exports: koiKind });
+    creatures.register({ id: 'koi-fish', title: '中国淡水鱼', create: koiKind.create, exports: koiKind });
 
-    // ── 玩法:时钟(沉在水下的 hud 层) ──
+    // ── 玩法:时钟(可在水下 hud 与最上层 ui 之间切换) ──
     features.register({ id: 'clock', title: '时钟', create: () => {
         const clock = createClock({ viewport: context.viewport });
         let on = true;
         return {
-            layers: { hud: g => { if (on) clock.draw(g); } },
+            layers: {
+                hud: g => { if (on && !THEME.clock.foreground) clock.draw(g); },
+                ui: g => { if (on && THEME.clock.foreground) clock.draw(g); }
+            },
             setEnabled(next) { on = !!next; }        // 与第一轮一致:关掉只是不画,不是卸载
         };
     } });
@@ -47,9 +50,9 @@ export function registerBuiltins({ creatures, features, context }) {
         };
     } });
 
-    // ── 玩法:自定义鱼(用户捏的鱼;禁用时连鱼带监听一起收走) ──
+    // ── 玩法:用户鱼数据库、添加器与状态面板 ──
     features.register({ id: 'customFish', title: '自定义鱼', create: () => {
-        const make = () => createCustomFish({
+        const make = () => createFishManager({
             Koi: koiKind.Koi, koiType: context.types.get('koi'),
             kois: context.kois, config: context.config, viewport: context.viewport,
             spawnRipple: context.spawnRipple, repository: context.repository
@@ -58,6 +61,7 @@ export function registerBuiltins({ creatures, features, context }) {
         return {
             loadCustomFishFromStore: (...a) => inst?.loadCustomFishFromStore(...a),
             syncCustomFish: (...a) => inst?.syncCustomFish(...a),
+            update: (...a) => inst?.update?.(...a),
             setEnabled(on) {
                 if (!on) { inst?.dispose(); inst = null; }
                 else if (!inst) { inst = make(); inst.loadCustomFishFromStore(); }
@@ -85,14 +89,17 @@ export function registerBuiltins({ creatures, features, context }) {
 
     // 独立编辑版的实时外观调试面板。
     features.register({ id: 'fishDebugPanel', title: '鱼外观调试', create: () => createFishDebugPanel({
-        kois: context.kois, config: context.config, types: context.types
+        kois: context.kois, config: context.config, types: context.types, repository: context.repository
     }) });
 
     features.register({ id: 'rippleDebugPanel', title: '波纹调试', create: () => createRippleDebugPanel({
-        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple
+        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple,
+        repository: context.repository
     }) });
 
-    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel() });
+    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel({
+        repository: context.repository
+    }) });
 
     return { creatures, features };
 }

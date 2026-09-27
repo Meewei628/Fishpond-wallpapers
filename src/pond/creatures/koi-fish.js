@@ -31,11 +31,11 @@ class Koi {
         this.baseSpeed = (0.4 + Math.random() * 0.4) * this.type.speedMultiplier;
         this.maxForce = 0.03;
 
-        this.pickBreed();
         // 尺寸和深浅差异:没有这个,一池鱼像复制粘贴
         this.depth = Math.random();
-        // 整体再缩小约 17%，但仍保留能一眼辨认的小鱼与大鱼。
-        this.sizeMul = 0.40 + this.depth * 0.56;
+        this.baseSizeMul = 0.40 + this.depth * 0.56;
+        this.pickBreed();
+        this.sizeMul = this.baseSizeMul * this.breedSize;
 
         this.segments = [];
         this.numSegments = 12;
@@ -114,6 +114,10 @@ class Koi {
     applyBreed(pick) {
         this.breedId = pick.id || 'custom-palette';
         this.breed = pick.name;
+        this.breedSize = pick.size || 1;
+        if (this.baseSizeMul) this.sizeMul = this.baseSizeMul * this.breedSize;
+        this.shape = KOI_SHAPE.clampShape(pick.shape || this.type.shape);
+        this.outlineWidth = pick.outlineWidth ?? 0.10;
         const tint = (Math.random() - 0.5) * 0.18;
         this.color = varyHexColor(pick.body, tint);
 

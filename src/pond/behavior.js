@@ -180,7 +180,7 @@ function update(dt) {
 
             if (minDistSq < EAT_RADIUS_SQ || this.bodyTouchesFood(target)) {
                 foods.splice(foods.indexOf(target), 1);
-
+                this.onEat?.();
                 this.fedTimer = 51;
             }
 
