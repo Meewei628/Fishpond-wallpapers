@@ -1,4 +1,6 @@
 import { THEME } from '../shared/legacy-assets.js';
+import { ensureIconStyles, icon } from '../ui/icons.js';
+import { createLiveWeather, weatherIconKind } from './live-weather.js';
 /* ★ 光向【每帧现读】,不再在加载时解构。
  *   原来是 `const [lx(), ly()] = THEME.light.dir` —— 加载时固化,
  *   之后运行时光向转了也【完全不动】(影子/涟漪/时钟偏移全都不跟),典型的"改了没反应"。
@@ -7,10 +9,48 @@ import { THEME } from '../shared/legacy-assets.js';
 const lx = () => THEME.light.dir[0];
 const ly = () => THEME.light.dir[1];
 
+function addSettingsButtonStyles() {
+    if (document.getElementById('clock-settings-button-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'clock-settings-button-styles';
+    style.textContent = [
+        '.clock-settings-button{position:fixed;z-index:29;display:grid;place-items:center;padding:0;border:1px solid currentColor;border-radius:11px;background:rgba(6,34,31,.20);box-shadow:0 8px 22px rgba(0,28,25,.16);color:rgba(244,252,248,.88);opacity:.76;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:opacity 160ms ease-out,background-color 160ms ease-out,transform 160ms ease-out}',
+        '.clock-settings-button[hidden]{display:none}.clock-settings-button[data-card="true"]{background:rgba(255,255,255,.10)}.clock-settings-button:hover{opacity:1;transform:translateY(-1px)}',
+        '.clock-settings-button:focus-visible{outline:2px solid var(--pond-ui-focus);outline-offset:2px}.clock-settings-button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}',
+        '@media(prefers-reduced-motion:reduce){.clock-settings-button{transition:none}}'
+    ].join('\\n');
+    document.head.appendChild(style);
+}
+
 export function createClock({ viewport }) {
+ensureIconStyles();
 let clockTime = '', clockDate = '', clockStamp = '';
 const glassCache = new Map();
 const cardBuffer = document.createElement('canvas');
+const liveWeather = createLiveWeather();
+addSettingsButtonStyles();
+const settingsButton = document.createElement('button');
+settingsButton.className = 'clock-settings-button';
+settingsButton.type = 'button';
+settingsButton.hidden = true;
+settingsButton.title = '设置';
+settingsButton.setAttribute('aria-label', '打开设置');
+settingsButton.setAttribute('aria-haspopup', 'dialog');
+settingsButton.setAttribute('aria-expanded', 'false');
+settingsButton.innerHTML = icon('sliders', 'pond-icon pond-icon--20');
+document.body.appendChild(settingsButton);
+
+function openSettings(event) {
+    event.stopPropagation();
+    window.dispatchEvent(new CustomEvent('koi:open-settings'));
+}
+
+function syncSettingsState(event) {
+    settingsButton.setAttribute('aria-expanded', String(event.detail?.open === true));
+}
+
+settingsButton.addEventListener('click', openSettings);
+window.addEventListener('koi:settings-state', syncSettingsState);
 
 function roundedRect(g, x, y, width, height, radius) {
     const r = Math.min(radius, width / 2, height / 2);
@@ -166,14 +206,97 @@ function refreshClockText() {
     clockDate = (d.getMonth() + 1) + '月' + d.getDate() + '日  星期' + wk;
 }
 
+function drawWeatherIcon(g, x, y, size, kind, color) {
+    const r = size * 0.22;
+    const line = Math.max(1.2, size * 0.075);
+    const sun = (sx, sy, sr) => {
+        g.beginPath();
+        g.arc(sx, sy, sr, 0, Math.PI * 2);
+        g.stroke();
+        for (let index = 0; index < 8; index++) {
+            const angle = index * Math.PI / 4;
+            g.beginPath();
+            g.moveTo(sx + Math.cos(angle) * sr * 1.55, sy + Math.sin(angle) * sr * 1.55);
+            g.lineTo(sx + Math.cos(angle) * sr * 2.15, sy + Math.sin(angle) * sr * 2.15);
+            g.stroke();
+        }
+    };
+    const cloud = (cx, cy) => {
+        g.beginPath();
+        g.moveTo(cx - size * 0.34, cy + size * 0.13);
+        g.bezierCurveTo(cx - size * 0.48, cy + size * 0.13, cx - size * 0.50, cy - size * 0.08, cx - size * 0.32, cy - size * 0.12);
+        g.bezierCurveTo(cx - size * 0.25, cy - size * 0.36, cx + size * 0.12, cy - size * 0.35, cx + size * 0.20, cy - size * 0.12);
+        g.bezierCurveTo(cx + size * 0.43, cy - size * 0.12, cx + size * 0.48, cy + size * 0.13, cx + size * 0.30, cy + size * 0.13);
+        g.closePath();
+        g.stroke();
+    };
+
+    g.save();
+    g.strokeStyle = color;
+    g.fillStyle = color;
+    g.lineWidth = line;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    if (kind === 'sun') {
+        sun(x, y, r);
+    } else if (kind === 'moon') {
+        g.beginPath();
+        g.arc(x, y, size * 0.31, Math.PI * 0.30, Math.PI * 1.70);
+        g.bezierCurveTo(x + size * 0.08, y + size * 0.25, x + size * 0.08, y - size * 0.25, x + size * 0.19, y - size * 0.26);
+        g.stroke();
+    } else if (kind === 'partly-cloudy') {
+        sun(x - size * 0.17, y - size * 0.17, size * 0.13);
+        cloud(x + size * 0.08, y + size * 0.08);
+    } else if (kind === 'fog') {
+        for (const offset of [-0.20, 0, 0.20]) {
+            g.beginPath();
+            g.moveTo(x - size * 0.34, y + size * offset);
+            g.lineTo(x + size * 0.34, y + size * offset);
+            g.stroke();
+        }
+    } else {
+        cloud(x, y - size * 0.08);
+        if (kind === 'rain') {
+            for (const offset of [-0.18, 0.08, 0.30]) {
+                g.beginPath();
+                g.moveTo(x + size * offset, y + size * 0.15);
+                g.lineTo(x + size * (offset - 0.06), y + size * 0.34);
+                g.stroke();
+            }
+        } else if (kind === 'snow') {
+            for (const offset of [-0.18, 0.12]) {
+                const sx = x + size * offset, sy = y + size * 0.25;
+                g.beginPath();
+                g.moveTo(sx - size * 0.07, sy); g.lineTo(sx + size * 0.07, sy);
+                g.moveTo(sx, sy - size * 0.07); g.lineTo(sx, sy + size * 0.07);
+                g.stroke();
+            }
+        } else if (kind === 'thunder') {
+            g.beginPath();
+            g.moveTo(x + size * 0.03, y + size * 0.10);
+            g.lineTo(x - size * 0.08, y + size * 0.29);
+            g.lineTo(x + size * 0.05, y + size * 0.27);
+            g.lineTo(x - size * 0.02, y + size * 0.43);
+            g.stroke();
+        }
+    }
+    g.restore();
+}
+
 function drawClock(g) {
     const T = THEME.clock;
-    if (!T.show) return;
+    if (!T.show) {
+        settingsButton.hidden = true;
+        return;
+    }
     refreshClockText();
     const short = Math.min(viewport.width, viewport.height);
     const tSize = short * T.timeSize;
     const dSize = tSize * T.dateSize;
     const gap = tSize * T.gap;
+    const buttonSize = Math.max(40, Math.min(46, short * 0.042));
+    const buttonGap = Math.max(9, tSize * 0.16);
+    const buttonReserve = buttonSize + buttonGap;
     // anchor 的写法是【纵向-横向】(top-center = 靠上 + 居中)
     const [vert, horiz] = T.anchor.split('-');
     const mx = viewport.width * T.marginX, my = viewport.height * T.marginY;
@@ -181,7 +304,7 @@ function drawClock(g) {
     g.save();
     g.textBaseline = 'middle';
     g.textAlign = horiz === 'left' ? 'left' : (horiz === 'right' ? 'right' : 'center');
-    const cx = horiz === 'left' ? mx : (horiz === 'right' ? viewport.width - mx : viewport.width / 2);
+    const cx = horiz === 'left' ? mx : (horiz === 'right' ? viewport.width - mx - buttonReserve : viewport.width / 2);
 
     const timeWeight = T.weight || 600;
     const dateWeight = Math.max(300, timeWeight - 200);
@@ -189,20 +312,45 @@ function drawClock(g) {
     const timeWidth = g.measureText(clockTime).width;
     g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
     const dateWidth = g.measureText(clockDate).width;
+    const weather = liveWeather.state;
+    const weatherSize = Math.max(12, dSize * 0.68);
+    const weatherIconSize = weatherSize * 1.30;
+    const weatherTemperature = Number.isFinite(weather.temperature) ? Math.round(weather.temperature) + '°C' : '--°C';
+    g.font = '500 ' + Math.round(weatherSize) + 'px ' + T.font;
+    const weatherLeftWidth = weatherIconSize + weatherSize * 0.42 + g.measureText(weather.label).width;
+    const weatherRight = weather.location + '  ' + weatherTemperature;
+    const weatherRightWidth = g.measureText(weatherRight).width;
+    const weatherWidth = weatherLeftWidth + Math.max(18, weatherSize) + weatherRightWidth;
+    const contentWidth = Math.max(timeWidth, dateWidth, weatherWidth);
 
     // 时间在上、日期在下;整块的高度用来做垂直锚点
-    const blockH = tSize + gap + dSize;
+    const weatherGap = Math.max(8, dSize * 0.42);
+    const weatherHeight = weatherIconSize;
+    const blockH = tSize + gap + dSize + weatherGap + weatherHeight;
     const top = vert === 'top' ? my : viewport.height - my - blockH;
     const timeY = top + tSize / 2;
     const dateY = top + tSize + gap + dSize / 2;
+    const weatherY = top + tSize + gap + dSize + weatherGap + weatherHeight / 2;
+    const padX = tSize * 0.34, padY = tSize * 0.30;
+    const cardWidth = contentWidth + padX * 2 + buttonReserve;
+    const cardHeight = blockH + padY * 2;
+    const cardX = horiz === 'left'
+        ? cx - padX
+        : (horiz === 'right' ? cx - contentWidth - padX : cx - contentWidth / 2 - padX);
+    const cardY = top - padY;
 
     if (T.cardGlass) {
-        const padX = tSize * 0.34, padY = tSize * 0.30;
-        const cardWidth = Math.max(timeWidth, dateWidth) + padX * 2;
-        const cardHeight = blockH + padY * 2;
-        const cardX = horiz === 'left' ? cx - padX : (horiz === 'right' ? cx - cardWidth + padX : cx - cardWidth / 2);
-        drawFrostedCard(g, cardX, top - padY, cardWidth, cardHeight, short, T);
+        drawFrostedCard(g, cardX, cardY, cardWidth, cardHeight, short, T);
     }
+
+    const buttonX = Math.max(8, Math.min(viewport.width - buttonSize - 8, cardX + padX + contentWidth + buttonGap));
+    const buttonY = Math.max(8, Math.min(viewport.height - buttonSize - 8, top + (tSize - buttonSize) / 2));
+    settingsButton.hidden = false;
+    settingsButton.dataset.card = String(T.cardGlass === true);
+    settingsButton.style.left = buttonX.toFixed(1) + 'px';
+    settingsButton.style.top = buttonY.toFixed(1) + 'px';
+    settingsButton.style.width = settingsButton.style.height = buttonSize.toFixed(1) + 'px';
+    settingsButton.style.color = T.cardGlass ? T.cardTextColor : T.color;
 
     // 影子沿全局光向偏移 + 模糊 —— 和鱼的影子同一套光,才会像"在这个场景里"
     const off = short * T.shadowOffset;
@@ -238,8 +386,32 @@ function drawClock(g) {
 
     drawMainText(clockTime, cx, timeY, tSize, timeWeight);
     drawMainText(clockDate, cx, dateY, dSize, dateWeight);
+    const contentLeft = horiz === 'left' ? cx : (horiz === 'right' ? cx - contentWidth : cx - contentWidth / 2);
+    const weatherColor = T.cardGlass ? T.cardTextColor : T.color;
+    g.save();
+    g.globalAlpha = 0.82;
+    g.shadowColor = 'transparent';
+    drawWeatherIcon(g, contentLeft + weatherIconSize / 2, weatherY, weatherIconSize,
+        weatherIconKind(weather.code, weather.isDay), weatherColor);
+    g.fillStyle = weatherColor;
+    g.font = '500 ' + Math.round(weatherSize) + 'px ' + T.font;
+    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    g.fillText(weather.label, contentLeft + weatherIconSize + weatherSize * 0.42, weatherY);
+    g.textAlign = 'right';
+    g.fillText(weatherRight, contentLeft + contentWidth, weatherY);
+    g.restore();
     g.restore();
 }
 
-return { draw: drawClock };
+return {
+    draw: drawClock,
+    setEnabled(enabled) { settingsButton.hidden = !enabled || THEME.clock.show === false; },
+    dispose() {
+        settingsButton.removeEventListener('click', openSettings);
+        window.removeEventListener('koi:settings-state', syncSettingsState);
+        liveWeather.dispose();
+        settingsButton.remove();
+    }
+};
 }

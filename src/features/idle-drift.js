@@ -110,7 +110,7 @@ export function createIdleDrift({ config, viewport, foods, input, mouse, kois })
             /* 注入一次"鼠标在这儿":behavior 的躲鼠标分支会真的把附近的鱼赶散。
              * 只注入一次、不每帧重写 —— 用户真去动鼠标时,桥推来的位置会自然覆盖它
              * (这正好是自持事件的场景:没人操作的时候才有这些事件)。 */
-            input.move(it.x, it.y);
+            input.startle(it.x, it.y);
             holds.push({ x: it.x, y: it.y, left: (P.startle && P.startle.hold) || 0.42 });
             startled += near;
         }

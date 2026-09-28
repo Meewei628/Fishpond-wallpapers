@@ -1,5 +1,7 @@
 import { THEME } from '../shared/legacy-assets.js';
 
+import { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } from './icons.js';
+
 const STORE_KEY = 'koi.debug.clock.v1';
 
 function addStyles() {
@@ -8,6 +10,7 @@ function addStyles() {
     style.id = 'clock-debug-panel-styles';
     style.textContent = [
         '.clock-debug{position:fixed;top:16px;left:352px;z-index:22;color:#eef8f4;font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif}',
+        '.clock-debug:not(.clock-debug--embedded){top:50%;left:50%;transform:translate(-50%,-50%)}',
         '.clock-debug *{box-sizing:border-box}',
         '.clock-debug button,.clock-debug input,.clock-debug select,.clock-debug textarea{font:inherit}',
         '.clock-debug__toggle{min-width:92px;height:40px;padding:0 16px;border:1px solid rgba(208,235,225,.32);border-radius:12px;background:rgba(6,22,21,.94);color:#f4fbf8;box-shadow:0 10px 30px rgba(0,0,0,.28);cursor:pointer}',
@@ -16,31 +19,38 @@ function addStyles() {
         '.clock-debug__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}',
         '.clock-debug__title{margin:0;font-size:18px;line-height:1.25;font-weight:750;letter-spacing:-.02em}',
         '.clock-debug__hint{margin:4px 0 0;color:#a8c6bb;font-size:12px}',
-        '.clock-debug__close{height:34px;padding:0 10px;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
+        '.clock-debug__close{width:34px;height:34px;padding:0;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
         '.clock-debug__section{margin:0;padding:15px 0;border:0;border-top:1px solid rgba(208,235,225,.14)}',
         '.clock-debug__legend{padding:0 0 10px;font-size:13px;font-weight:700;color:#cfe6de}',
         '.clock-debug__field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px 12px;margin-bottom:13px}',
         '.clock-debug__field:last-child{margin-bottom:0}',
         '.clock-debug__field label{color:#dcece6}',
-        '.clock-debug__value{min-width:52px;text-align:right;color:#91d7c0;font-variant-numeric:tabular-nums}',
-        '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
+        '.clock-debug__value{min-width:52px;text-align:right;color:var(--pond-ui-primary);font-variant-numeric:tabular-nums}',
+        '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:var(--pond-ui-primary)}',
         '.clock-debug__field input[type="color"]{width:48px;height:30px;padding:2px;border:1px solid rgba(208,235,225,.25);border-radius:7px;background:#102b28;cursor:pointer}',
-        '.clock-debug__field input[type="checkbox"]{width:18px;height:18px;accent-color:#76cdb0}',
+        '.clock-debug__field input[type="checkbox"]{appearance:none;-webkit-appearance:none;position:relative;width:42px;height:24px;margin:0;border:1px solid rgba(208,235,225,.28);border-radius:999px;background:rgba(218,244,236,.12);box-shadow:inset 0 1px 3px rgba(0,20,18,.24);cursor:pointer;transition:background-color 160ms ease-out,border-color 160ms ease-out,box-shadow 160ms ease-out}',
+        '.clock-debug__field input[type="checkbox"]::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:rgba(238,250,246,.82);box-shadow:0 2px 5px rgba(0,20,18,.34);transition:transform 180ms cubic-bezier(.2,.8,.2,1),background-color 160ms ease-out}',
+        '.clock-debug__field input[type="checkbox"]:hover{border-color:var(--pond-ui-primary-border);background:var(--pond-ui-primary-soft)}',
+        '.clock-debug__field input[type="checkbox"]:checked{border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);box-shadow:inset 0 1px 3px rgba(0,45,39,.22)}',
+        '.clock-debug__field input[type="checkbox"]:checked::after{transform:translateX(18px);background:var(--pond-ui-primary-ink)}',
+        '.clock-debug__field input[type="checkbox"]:disabled{opacity:.45;cursor:not-allowed}',
         '.clock-debug__palettes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 14px}',
-        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
+        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr 16px;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
         '.clock-debug__palette[aria-pressed="true"]{border-color:#8bdbc0;box-shadow:0 0 0 2px rgba(139,219,192,.20)}',
         '.clock-debug__palette-swatch{position:relative;width:28px;height:28px;border:1px solid rgba(255,255,255,.42);border-radius:7px;background:var(--palette-bg);box-shadow:inset 0 1px rgba(255,255,255,.35)}',
         '.clock-debug__palette-swatch::after{content:"Aa";position:absolute;inset:0;display:grid;place-items:center;color:var(--palette-fg);font:700 10px/1 system-ui,sans-serif}',
         '.clock-debug__palette-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
+        '.clock-debug__palette-mark{opacity:0;color:var(--pond-ui-primary)}.clock-debug__palette[aria-pressed="true"] .clock-debug__palette-mark{opacity:1}',
         '.clock-debug__select{grid-column:1/-1;width:100%;height:38px;padding:0 10px;border:1px solid rgba(208,235,225,.24);border-radius:8px;background:#102b28;color:#eef8f4}',
         '.clock-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.clock-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
-        '.clock-debug__button--primary{border-color:#72cbae;background:#72cbae;color:#08211d;font-weight:750}',
+        '.clock-debug__button--primary{border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);color:var(--pond-ui-primary-ink);font-weight:750}',
         '.clock-debug__output{width:100%;height:108px;margin-top:12px;padding:10px;resize:vertical;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#081b1a;color:#bfe1d6;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;caret-color:#8fe0c3}',
         '.clock-debug__status{min-height:20px;margin:10px 0 0;color:#9ccabd;font-size:12px}',
         '.clock-debug button:hover{filter:brightness(1.08)}',
-        '.clock-debug button:focus-visible,.clock-debug input:focus-visible,.clock-debug select:focus-visible,.clock-debug textarea:focus-visible{outline:3px solid rgba(138,225,196,.7);outline-offset:2px}',
-        '@media(max-width:900px){.clock-debug{top:60px;left:10px}.clock-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 70px)}}',
+        '.clock-debug button:focus-visible,.clock-debug input:focus-visible,.clock-debug select:focus-visible,.clock-debug textarea:focus-visible{outline:3px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@media(max-width:900px){.clock-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
+        '@media(prefers-reduced-motion:reduce){.clock-debug__field input[type="checkbox"],.clock-debug__field input[type="checkbox"]::after{transition:none}}',
         '@media(prefers-reduced-transparency:reduce){.clock-debug__panel,.clock-debug__toggle{background:#061615;backdrop-filter:none}}'
     ].join('\n');
     document.head.appendChild(style);
@@ -68,7 +78,8 @@ function rgba(hex, alpha) {
     return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha.toFixed(3) + ')';
 }
 
-export function createClockDebugPanel({ repository }) {
+export function createClockDebugPanel({ repository, embedded = false }) {
+    ensureIconStyles();
     addStyles();
     const T = THEME.clock;
     const parsed = parseColor(T.color);
@@ -94,7 +105,7 @@ export function createClockDebugPanel({ repository }) {
     ];
     const paletteMarkup = palettes.map(palette =>
         '<button class="clock-debug__palette" type="button" data-palette="' + palette.id + '" aria-pressed="false" style="--palette-bg:' + palette.bg + ';--palette-fg:' + palette.text + '">' +
-        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span></button>'
+        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span><span class="clock-debug__palette-mark" aria-hidden="true">' + icon('check') + '</span></button>'
     ).join('');
     let fontId = Object.keys(fonts).find(key => fonts[key] === T.font) || 'yahei';
     const fields = {
@@ -151,11 +162,12 @@ export function createClockDebugPanel({ repository }) {
 
     const shell = document.createElement('aside');
     shell.className = 'clock-debug';
+    if (embedded) shell.classList.add('clock-debug--embedded');
     shell.setAttribute('aria-label', '时间显示样式调试工具');
     shell.innerHTML = [
-        '<button class="clock-debug__toggle" type="button" aria-expanded="true" hidden>时间样式</button>',
+        '<button class="clock-debug__toggle pond-icon-button" type="button" aria-expanded="true" hidden>' + iconLabel('clock', '时间样式') + '</button>',
         '<section class="clock-debug__panel">',
-        '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟 · 按 T 显示或隐藏</p></div><button class="clock-debug__close" type="button">收起</button></header>',
+        '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟</p></div><button class="clock-debug__close pond-icon-only" type="button" aria-label="收起时间样式面板" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">显示与位置</legend>',
         '<div class="clock-debug__field"><label for="clock-debug-show">显示时间</label><input id="clock-debug-show" data-show type="checkbox"></div>',
         '<div class="clock-debug__field"><label for="clock-debug-foreground">时间置于鱼上方</label><input id="clock-debug-foreground" data-foreground type="checkbox"></div>',
@@ -177,7 +189,7 @@ export function createClockDebugPanel({ repository }) {
         group(['cardTextOpacity', 'cardOpacity', 'cardBlur', 'cardRadius', 'cardShadow']), '</fieldset>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">阴影</legend>',
         group(['shadowAlpha', 'shadowBlur', 'shadowOffset']), '</fieldset>',
-        '<div class="clock-debug__actions"><button class="clock-debug__button" type="button" data-reset>恢复默认</button><button class="clock-debug__button clock-debug__button--primary" type="button" data-copy>复制参数</button></div>',
+        '<div class="clock-debug__actions"><button class="clock-debug__button pond-icon-button" type="button" data-reset>' + iconLabel('rotate-ccw', '恢复默认') + '</button><button class="clock-debug__button clock-debug__button--primary pond-icon-button" type="button" data-copy>' + iconLabel('copy', '复制参数') + '</button></div>',
         '<textarea class="clock-debug__output" readonly aria-label="当前时间样式参数"></textarea>',
         '<p class="clock-debug__status" role="status" aria-live="polite"></p>',
         '</section>'
@@ -285,16 +297,10 @@ export function createClockDebugPanel({ repository }) {
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
         toggle.setAttribute('aria-expanded', String(open));
         if (open) close.focus(); else toggle.focus();
-    }
-
-    function onKeyDown(event) {
-        const tag = event.target && event.target.tagName;
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-        if (event.key.toLowerCase() === 't') setOpen(panel.hidden);
     }
 
     for (const input of inputs) input.addEventListener('input', () => {
@@ -350,11 +356,12 @@ export function createClockDebugPanel({ repository }) {
     });
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
-    close.addEventListener('click', () => setOpen(false));
-    toggle.addEventListener('click', () => setOpen(true));
-    window.addEventListener('keydown', onKeyDown);
+    if (!embedded) {
+        close.addEventListener('click', () => setOpen(false));
+        toggle.addEventListener('click', () => setOpen(true));
+    }
     refresh();
     status.textContent = saved ? '已恢复上次保存的时间样式' : '面板已就绪';
 
-    return { dispose() { window.removeEventListener('keydown', onKeyDown); shell.remove(); } };
+    return { element: shell, dispose() { shell.remove(); } };
 }

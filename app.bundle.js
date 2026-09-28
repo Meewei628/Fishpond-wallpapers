@@ -31,14 +31,14 @@ const { createRepository } = __require("src/storage/repository.js");
 const { createInputRouter } = __require("src/input/input-router.js");
 const { attachBrowserInput } = __require("src/input/browser-input.js");
 const { registerBuiltins } = __require("src/builtins.js");
-function createPondApp(canvas) {
+async function createPondApp(canvas) {
     const config = createSettings();
     const types = createFishTypes();
     const viewport = { width: innerWidth, height: innerHeight };
     const time = { elapsed: 0 };
     const kois = [], foods = [];
     const mouse = { x: null, y: null, active: false };
-    const repository = createRepository();
+    const repository = await createRepository();
     const ripples = createRipples({ config, viewport });
     const { spawnRipple } = ripples;
     const schoolSystem = createSchools({ config, viewport });
@@ -65,7 +65,7 @@ function createPondApp(canvas) {
         onAfterSync: () => features.get('customFish')?.syncCustomFish?.()
     });
     population.syncStock();
-    features.get('fishDebugPanel')?.restoreSaved?.();
+    features.get('settingsPanel')?.restoreSaved?.();
     features.get('customFish')?.loadCustomFishFromStore?.();
 
     const { resolveFishCollisions } = createCollisions({ kois, config });
@@ -108,19 +108,30 @@ function createPondApp(canvas) {
         })
     };
 }
-const app = createPondApp(document.getElementById('wallpaper-canvas'));
 const params = new URLSearchParams(location.search);
-if (params.has('debug')) window.__pondDebug = app;
-// 预览/联调用:index.html?weather=rain|clear —— 宿主里没有这个参数,
-// 正式版不出现任何 UI(天气只由宿主属性 config.weather 控制)。它同时是"网页 demo 那一路"的入口。
-// ⚠️ 参数写错(例如老的 ?weather=overcast)只警告,不能让整页挂掉 —— 顶部抛异常 = 白屏。
-if (params.has('weather')) {
-    const v = params.get('weather');
-    try { app.setWeather(v); } catch (e) { console.warn('[koi] 未知的 weather 参数,已忽略:', v); }
-}
-app.start();
+let app = null;
+const appReady = createPondApp(document.getElementById('wallpaper-canvas')).then(instance => {
+    app = instance;
+    if (params.has('debug')) window.__pondDebug = instance;
+    // 预览/联调用:index.html?weather=rain|clear —— 宿主里没有这个参数,
+    // 正式版不出现任何 UI(天气只由宿主属性 config.weather 控制)。它同时是"网页 demo 那一路"的入口。
+    // ⚠️ 参数写错(例如老的 ?weather=overcast)只警告,不能让整页挂掉 —— 顶部抛异常 = 白屏。
+    if (params.has('weather')) {
+        const v = params.get('weather');
+        try { instance.setWeather(v); } catch (e) { console.warn('[koi] 未知的 weather 参数,已忽略:', v); }
+    }
+    instance.start();
+    return instance;
+}).catch(error => {
+    console.error('[koi] IndexedDB 初始化失败，鱼池无法启动:', error);
+    const message = document.createElement('p');
+    message.textContent = '本地数据库初始化失败，请检查浏览器是否允许 IndexedDB。';
+    message.style.cssText = 'position:fixed;inset:50% auto auto 50%;transform:translate(-50%,-50%);color:#fff;font:16px system-ui';
+    document.body.appendChild(message);
+    return null;
+});
 
-Object.assign(exports, { createPondApp, app });
+Object.assign(exports, { createPondApp, app, appReady });
 };
 __modules["src/pond/types.js"] = function (exports, __require) {
 const { KOI_BREEDS } = __require("src/pond/breeds.js");
@@ -2676,11 +2687,146 @@ function createRainRipples({ viewport, config, profile }) {
 Object.assign(exports, { createRipples, createRainRipples });
 };
 __modules["src/storage/repository.js"] = function (exports, __require) {
-function createRepository() {
+const DATABASE_NAME = 'koi-pond';
+const DATABASE_VERSION = 1;
+const STORE_NAME = 'records';
+const LEGACY_PREFIX = 'koi.';
+
+const clone = value => value == null ? value : globalThis.structuredClone
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
+
+function requestResult(request) {
+    return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function transactionDone(transaction) {
+    return new Promise((resolve, reject) => {
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+    });
+}
+
+function openDatabase() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+        request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+                request.result.createObjectStore(STORE_NAME);
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => reject(new Error('IndexedDB upgrade was blocked'));
+    });
+}
+
+async function loadRecords(database) {
+    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const finished = transactionDone(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    const [keys, values] = await Promise.all([
+        requestResult(store.getAllKeys()),
+        requestResult(store.getAll())
+    ]);
+    await finished;
+    return new Map(keys.map((key, index) => [key, values[index]]));
+}
+
+async function migrateLocalStorage(database, records) {
+    const legacy = [];
+    try {
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (!key?.startsWith(LEGACY_PREFIX) || records.has(key)) continue;
+            const raw = localStorage.getItem(key);
+            if (raw == null) continue;
+            try { legacy.push([key, JSON.parse(raw)]); } catch { /* Ignore invalid old records. */ }
+        }
+    } catch { return; }
+    if (!legacy.length) return;
+
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const finished = transactionDone(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    for (const [key, value] of legacy) store.put(value, key);
+    await finished;
+
+    for (const [key, value] of legacy) {
+        records.set(key, value);
+        try { localStorage.removeItem(key); } catch { /* The IndexedDB copy is already durable. */ }
+    }
+}
+
+function createLocalStorageRepository() {
     return {
         getRaw(key) { try { return localStorage.getItem(key); } catch { return null; } },
-        read(key, fallback = null) { try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } },
-        write(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }
+        read(key, fallback = null) {
+            try {
+                const raw = localStorage.getItem(key);
+                return raw ? JSON.parse(raw) : fallback;
+            } catch { return fallback; }
+        },
+        write(key, value) {
+            try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+            catch (error) {
+                console.error('[koi] 兼容存储保存失败:', key, error);
+                return false;
+            }
+        }
+    };
+}
+async function createRepository() {
+    if (!globalThis.indexedDB) {
+        console.warn('[koi] 当前宿主不支持 IndexedDB，已使用兼容存储。');
+        return createLocalStorageRepository();
+    }
+
+    let database;
+    let records;
+    try {
+        database = await openDatabase();
+        records = await loadRecords(database);
+        await migrateLocalStorage(database, records);
+    } catch (error) {
+        database?.close();
+        console.warn('[koi] 当前宿主无法启用 IndexedDB，已使用兼容存储:', error);
+        return createLocalStorageRepository();
+    }
+
+    return {
+        getRaw(key) {
+            try { return records.has(key) ? JSON.stringify(records.get(key)) : null; }
+            catch { return null; }
+        },
+        read(key, fallback = null) {
+            try { return records.has(key) ? clone(records.get(key)) : fallback; }
+            catch { return fallback; }
+        },
+        write(key, value) {
+            let stored;
+            try { stored = clone(value); }
+            catch (error) {
+                console.error('[koi] 无法保存不可复制的数据:', key, error);
+                return false;
+            }
+            records.set(key, stored);
+            try {
+                const transaction = database.transaction(STORE_NAME, 'readwrite');
+                transaction.objectStore(STORE_NAME).put(stored, key);
+                transactionDone(transaction).catch(error => {
+                    console.error('[koi] IndexedDB 保存失败:', key, error);
+                });
+                return true;
+            } catch (error) {
+                console.error('[koi] IndexedDB 保存失败:', key, error);
+                return false;
+            }
+        }
     };
 }
 
@@ -2689,18 +2835,43 @@ Object.assign(exports, { createRepository });
 __modules["src/input/input-router.js"] = function (exports, __require) {
 function createInputRouter(mouse) {
     const actions = new Map();
-    let mode = 'feed';
+    let mode = 'startle';
+    const startle = (x, y) => {
+        mouse.x = x;
+        mouse.y = y;
+        mouse.active = true;
+        mouse.startleUntil = performance.now() + 650;
+    };
     return {
-        move(x, y) { mouse.x = x; mouse.y = y; mouse.active = true; },
+        move(x, y) {
+            mouse.x = x;
+            mouse.y = y;
+            mouse.active = mode !== 'feed';
+        },
         leave() { mouse.active = false; },
         register(name, action) {
             if (actions.has(name)) throw new Error('Duplicate input mode: ' + name);
             actions.set(name, action);
             return () => actions.delete(name);
         },
-        setMode(name) { if (!actions.has(name)) throw new Error('Unknown input mode: ' + name); mode = name; },
-        activate(x, y) { actions.get(mode)?.(x, y); },
-        dispose() { actions.clear(); mouse.active = false; }
+        setMode(name) {
+            if (!actions.has(name)) throw new Error('Unknown input mode: ' + name);
+            mode = name;
+            mouse.active = false;
+        },
+        activate(x, y) {
+            if (mode === 'feed') {
+                mouse.x = x;
+                mouse.y = y;
+                mouse.active = false;
+            } else {
+                startle(x, y);
+            }
+            actions.get(mode)?.(x, y);
+        },
+        startle,
+        getMode: () => mode,
+        dispose() { actions.clear(); mouse.active = false; mouse.startleUntil = 0; }
     };
 }
 
@@ -2740,9 +2911,7 @@ const { createFishManager } = __require("src/features/fish-manager.js");
 const { createWeather } = __require("src/features/weather.js");
 const { createIdleDrift } = __require("src/features/idle-drift.js");
 const { createDayCycle } = __require("src/features/day-cycle.js");
-const { createFishDebugPanel } = __require("src/ui/fish-debug-panel.js");
-const { createRippleDebugPanel } = __require("src/ui/ripple-debug-panel.js");
-const { createClockDebugPanel } = __require("src/ui/clock-debug-panel.js");
+const { createSettingsPanel } = __require("src/ui/settings-panel.js");
 const { THEME } = __require("src/shared/legacy-assets.js");
 function registerBuiltins({ creatures, features, context }) {
     // ── 生物:中国淡水鱼(复用既有分节身体与群游控制器) ──
@@ -2762,17 +2931,18 @@ function registerBuiltins({ creatures, features, context }) {
                 hud: g => { if (on && !THEME.clock.foreground) clock.draw(g); },
                 ui: g => { if (on && THEME.clock.foreground) clock.draw(g); }
             },
-            setEnabled(next) { on = !!next; }        // 与第一轮一致:关掉只是不画,不是卸载
+            setEnabled(next) { on = !!next; clock.setEnabled(on); },
+            dispose() { clock.dispose(); }
         };
     } });
 
     // ── 玩法:投喂(占输入模式 feed;开关走 config.enableFeeding) ──
     features.register({ id: 'feeding', title: '投喂', create: () => {
-        const feeding = createFeeding({ config: context.config, foods: context.foods, Food: context.Food, spawnRipple: context.spawnRipple });
-        return {
-            interactions: { feed: feeding.feedAt },
-            setEnabled(next) { context.config.enableFeeding = !!next; }
-        };
+        const feeding = createFeeding({
+            config: context.config, foods: context.foods, Food: context.Food,
+            spawnRipple: context.spawnRipple, input: context.input
+        });
+        return feeding;
     } });
 
     // ── 玩法:用户鱼数据库、添加器与状态面板 ──
@@ -2812,18 +2982,10 @@ function registerBuiltins({ creatures, features, context }) {
         config: context.config, environment: context.environment
     }) });
 
-    // 独立编辑版的实时外观调试面板。
-    features.register({ id: 'fishDebugPanel', title: '鱼外观调试', create: () => createFishDebugPanel({
-        kois: context.kois, config: context.config, types: context.types, repository: context.repository
-    }) });
-
-    features.register({ id: 'rippleDebugPanel', title: '波纹调试', create: () => createRippleDebugPanel({
-        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple,
-        repository: context.repository
-    }) });
-
-    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel({
-        repository: context.repository
+    // 将鱼外观、波纹与时间样式收进同一个设置面板。
+    features.register({ id: 'settingsPanel', title: '设置', create: () => createSettingsPanel({
+        kois: context.kois, config: context.config, types: context.types,
+        viewport: context.viewport, spawnRipple: context.spawnRipple, repository: context.repository
     }) });
 
     return { creatures, features };
@@ -3013,6 +3175,9 @@ const FOOD_DETECT_RADIUS_SQ = 230400;
 const EAT_RADIUS = 20;          // 吃到半径(px)。原来只写了平方值,身体判定要用原值
 const EAT_RADIUS_SQ = 400;
 const FEAR_RADIUS_SQ = 40000;
+const FOLLOW_ARM_RADIUS_SQ = 40000;
+const FOLLOW_RELEASE_RADIUS_SQ = 360000;
+const FOLLOW_ARM_SECONDS = 2;
 function computeFlockInfluence() {
         let sepX = 0, sepY = 0, alignX = 0, alignY = 0;
         let centerX = 0, centerY = 0, neighborCount = 0;
@@ -3147,6 +3312,18 @@ function update(dt) {
         let behavior = 'cruise';
         let wantHeading = null;   // 本行为想去哪个方向(原地掉头要用)
         const flock = this.computeFlockInfluence();
+        const mouseDistanceSq = mouse.active ? distanceSq(this, mouse) : Infinity;
+        const startled = config.shyFish && mouseDistanceSq < FEAR_RADIUS_SQ
+            && (mouse.startleUntil || 0) > performance.now();
+        if (!mouse.active || mouseDistanceSq > FOLLOW_RELEASE_RADIUS_SQ || startled) {
+            this.mouseHoverTime = 0;
+            this.followsMouse = false;
+        } else if (!this.followsMouse) {
+            this.mouseHoverTime = mouseDistanceSq < FOLLOW_ARM_RADIUS_SQ
+                ? (this.mouseHoverTime || 0) + dt
+                : 0;
+            this.followsMouse = this.mouseHoverTime >= FOLLOW_ARM_SECONDS;
+        }
 
         const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
         const safeMargin = Math.max(50, bodyLength * 1.0);
@@ -3167,7 +3344,7 @@ function update(dt) {
         let edgeThreat = clamp(threat, 0, 1);
 
         const wantsFood = !!target && minDistSq < FOOD_DETECT_RADIUS_SQ;
-        const foodWins = wantsFood && edgeThreat < 0.5;
+        const foodWins = wantsFood && edgeThreat < 0.5 && !startled;
         if (edgeThreat > 0.04 && !foodWins) {
             behavior = 'edge';
             let inwardHeading = Math.atan2(inwardY, inwardX);
@@ -3191,12 +3368,19 @@ function update(dt) {
                 this.fedTimer = 51;
             }
 
-        } else if (config.shyFish && mouse.active && distanceSq(this, mouse) < FEAR_RADIUS_SQ) {
+        } else if (startled) {
             behavior = 'flee';
             let fleeHeading = Math.atan2(this.y - mouse.y, this.x - mouse.x);
             wantHeading = fleeHeading;
             desiredTurnRate = clamp(wrapAngle(fleeHeading - this.heading) * 2.7, -1.35, 1.35);
             desiredSpeed = effectiveBaseSpeed * 2.80;   // 受惊逃窜(原 2.15)
+        } else if (this.followsMouse) {
+            behavior = 'follow';
+            const followHeading = Math.atan2(mouse.y - this.y, mouse.x - this.x);
+            const followDistance = Math.sqrt(mouseDistanceSq);
+            wantHeading = followHeading;
+            desiredTurnRate = clamp(wrapAngle(followHeading - this.heading) * 2.2, -1.25, 1.25);
+            desiredSpeed = effectiveBaseSpeed * clamp((followDistance - 25) / 100, 0.35, 1.8);
         } else if (this.schoolId >= 0 && schools[this.schoolId]) {
 
             behavior = 'school';
@@ -3259,7 +3443,7 @@ function update(dt) {
                 // 群员只吃分离:方向和对齐由编队目标点负责,见 computeFlockInfluence 的注释
                 desiredTurnRate += flock.sepTurn * 0.30;
             } else {
-                const flockWeight = behavior === 'food' ? 0.60 : behavior === 'flee' ? 0.45 : 1.0;
+                const flockWeight = behavior === 'food' ? 0.60 : behavior === 'flee' ? 0.45 : behavior === 'follow' ? 0.55 : 1.0;
                 desiredTurnRate += flock.turn * flockWeight;
             }
         }
@@ -3290,10 +3474,10 @@ function update(dt) {
 
         let turnRadius = minimumTurnRadius;
         if (pivot) turnRadius = minimumTurnRadius * 0.05;          // 原地掉头:半径压到最小
-        else if (behavior === 'food') turnRadius = minimumTurnRadius * 0.26;
+        else if (behavior === 'food' || behavior === 'follow') turnRadius = minimumTurnRadius * 0.26;
         else if (this.schoolId >= 0) turnRadius = minimumTurnRadius * 0.32;
 
-        const fastAct = (behavior === 'food' || behavior === 'flee');
+        const fastAct = (behavior === 'food' || behavior === 'flee' || behavior === 'follow');
         const maxTurnRate = Math.min(pivot ? 2.6 : (fastAct ? 1.6 : 1.15),
                                      speedPerSecond / turnRadius);
         const turnAcceleration = (pivot ? 7.0 : 2.6) * motionTurnResponse; // 掉头时转向要起得来
@@ -3306,7 +3490,7 @@ function update(dt) {
         // 掉头时减速要快:时间常数从 ~0.9 秒压到 ~0.29 秒,否则 0.8 秒的窗口里掉不下来
         if (pivot) speedResponse = 3.5;
 
-        if (behavior === 'food' || behavior === 'flee') speedResponse = 4.5;
+        if (behavior === 'food' || behavior === 'flee' || behavior === 'follow') speedResponse = 4.5;
         this.speed += (desiredSpeed - this.speed) * Math.min(1, speedResponse * dt);
         // 上限要容得下新的倍率(2.8),否则躲鼠标的速度会被夹在 2.2 倍,提不起来
         let speedCap = effectiveBaseSpeed * 3.2;
@@ -3393,6 +3577,8 @@ Object.assign(exports, { createBehavior });
 };
 __modules["src/features/clock.js"] = function (exports, __require) {
 const { THEME } = __require("src/shared/legacy-assets.js");
+const { ensureIconStyles, icon } = __require("src/ui/icons.js");
+const { createLiveWeather, weatherIconKind } = __require("src/features/live-weather.js");
 /* ★ 光向【每帧现读】,不再在加载时解构。
  *   原来是 `const [lx(), ly()] = THEME.light.dir` —— 加载时固化,
  *   之后运行时光向转了也【完全不动】(影子/涟漪/时钟偏移全都不跟),典型的"改了没反应"。
@@ -3400,10 +3586,48 @@ const { THEME } = __require("src/shared/legacy-assets.js");
  *   ⚠️ THEME.light.dir 必须保持【单位向量】:多处拿它做投影与偏移量。 */
 const lx = () => THEME.light.dir[0];
 const ly = () => THEME.light.dir[1];
+
+function addSettingsButtonStyles() {
+    if (document.getElementById('clock-settings-button-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'clock-settings-button-styles';
+    style.textContent = [
+        '.clock-settings-button{position:fixed;z-index:29;display:grid;place-items:center;padding:0;border:1px solid currentColor;border-radius:11px;background:rgba(6,34,31,.20);box-shadow:0 8px 22px rgba(0,28,25,.16);color:rgba(244,252,248,.88);opacity:.76;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:opacity 160ms ease-out,background-color 160ms ease-out,transform 160ms ease-out}',
+        '.clock-settings-button[hidden]{display:none}.clock-settings-button[data-card="true"]{background:rgba(255,255,255,.10)}.clock-settings-button:hover{opacity:1;transform:translateY(-1px)}',
+        '.clock-settings-button:focus-visible{outline:2px solid var(--pond-ui-focus);outline-offset:2px}.clock-settings-button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}',
+        '@media(prefers-reduced-motion:reduce){.clock-settings-button{transition:none}}'
+    ].join('\\n');
+    document.head.appendChild(style);
+}
 function createClock({ viewport }) {
+ensureIconStyles();
 let clockTime = '', clockDate = '', clockStamp = '';
 const glassCache = new Map();
 const cardBuffer = document.createElement('canvas');
+const liveWeather = createLiveWeather();
+addSettingsButtonStyles();
+const settingsButton = document.createElement('button');
+settingsButton.className = 'clock-settings-button';
+settingsButton.type = 'button';
+settingsButton.hidden = true;
+settingsButton.title = '设置';
+settingsButton.setAttribute('aria-label', '打开设置');
+settingsButton.setAttribute('aria-haspopup', 'dialog');
+settingsButton.setAttribute('aria-expanded', 'false');
+settingsButton.innerHTML = icon('sliders', 'pond-icon pond-icon--20');
+document.body.appendChild(settingsButton);
+
+function openSettings(event) {
+    event.stopPropagation();
+    window.dispatchEvent(new CustomEvent('koi:open-settings'));
+}
+
+function syncSettingsState(event) {
+    settingsButton.setAttribute('aria-expanded', String(event.detail?.open === true));
+}
+
+settingsButton.addEventListener('click', openSettings);
+window.addEventListener('koi:settings-state', syncSettingsState);
 
 function roundedRect(g, x, y, width, height, radius) {
     const r = Math.min(radius, width / 2, height / 2);
@@ -3559,14 +3783,97 @@ function refreshClockText() {
     clockDate = (d.getMonth() + 1) + '月' + d.getDate() + '日  星期' + wk;
 }
 
+function drawWeatherIcon(g, x, y, size, kind, color) {
+    const r = size * 0.22;
+    const line = Math.max(1.2, size * 0.075);
+    const sun = (sx, sy, sr) => {
+        g.beginPath();
+        g.arc(sx, sy, sr, 0, Math.PI * 2);
+        g.stroke();
+        for (let index = 0; index < 8; index++) {
+            const angle = index * Math.PI / 4;
+            g.beginPath();
+            g.moveTo(sx + Math.cos(angle) * sr * 1.55, sy + Math.sin(angle) * sr * 1.55);
+            g.lineTo(sx + Math.cos(angle) * sr * 2.15, sy + Math.sin(angle) * sr * 2.15);
+            g.stroke();
+        }
+    };
+    const cloud = (cx, cy) => {
+        g.beginPath();
+        g.moveTo(cx - size * 0.34, cy + size * 0.13);
+        g.bezierCurveTo(cx - size * 0.48, cy + size * 0.13, cx - size * 0.50, cy - size * 0.08, cx - size * 0.32, cy - size * 0.12);
+        g.bezierCurveTo(cx - size * 0.25, cy - size * 0.36, cx + size * 0.12, cy - size * 0.35, cx + size * 0.20, cy - size * 0.12);
+        g.bezierCurveTo(cx + size * 0.43, cy - size * 0.12, cx + size * 0.48, cy + size * 0.13, cx + size * 0.30, cy + size * 0.13);
+        g.closePath();
+        g.stroke();
+    };
+
+    g.save();
+    g.strokeStyle = color;
+    g.fillStyle = color;
+    g.lineWidth = line;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    if (kind === 'sun') {
+        sun(x, y, r);
+    } else if (kind === 'moon') {
+        g.beginPath();
+        g.arc(x, y, size * 0.31, Math.PI * 0.30, Math.PI * 1.70);
+        g.bezierCurveTo(x + size * 0.08, y + size * 0.25, x + size * 0.08, y - size * 0.25, x + size * 0.19, y - size * 0.26);
+        g.stroke();
+    } else if (kind === 'partly-cloudy') {
+        sun(x - size * 0.17, y - size * 0.17, size * 0.13);
+        cloud(x + size * 0.08, y + size * 0.08);
+    } else if (kind === 'fog') {
+        for (const offset of [-0.20, 0, 0.20]) {
+            g.beginPath();
+            g.moveTo(x - size * 0.34, y + size * offset);
+            g.lineTo(x + size * 0.34, y + size * offset);
+            g.stroke();
+        }
+    } else {
+        cloud(x, y - size * 0.08);
+        if (kind === 'rain') {
+            for (const offset of [-0.18, 0.08, 0.30]) {
+                g.beginPath();
+                g.moveTo(x + size * offset, y + size * 0.15);
+                g.lineTo(x + size * (offset - 0.06), y + size * 0.34);
+                g.stroke();
+            }
+        } else if (kind === 'snow') {
+            for (const offset of [-0.18, 0.12]) {
+                const sx = x + size * offset, sy = y + size * 0.25;
+                g.beginPath();
+                g.moveTo(sx - size * 0.07, sy); g.lineTo(sx + size * 0.07, sy);
+                g.moveTo(sx, sy - size * 0.07); g.lineTo(sx, sy + size * 0.07);
+                g.stroke();
+            }
+        } else if (kind === 'thunder') {
+            g.beginPath();
+            g.moveTo(x + size * 0.03, y + size * 0.10);
+            g.lineTo(x - size * 0.08, y + size * 0.29);
+            g.lineTo(x + size * 0.05, y + size * 0.27);
+            g.lineTo(x - size * 0.02, y + size * 0.43);
+            g.stroke();
+        }
+    }
+    g.restore();
+}
+
 function drawClock(g) {
     const T = THEME.clock;
-    if (!T.show) return;
+    if (!T.show) {
+        settingsButton.hidden = true;
+        return;
+    }
     refreshClockText();
     const short = Math.min(viewport.width, viewport.height);
     const tSize = short * T.timeSize;
     const dSize = tSize * T.dateSize;
     const gap = tSize * T.gap;
+    const buttonSize = Math.max(40, Math.min(46, short * 0.042));
+    const buttonGap = Math.max(9, tSize * 0.16);
+    const buttonReserve = buttonSize + buttonGap;
     // anchor 的写法是【纵向-横向】(top-center = 靠上 + 居中)
     const [vert, horiz] = T.anchor.split('-');
     const mx = viewport.width * T.marginX, my = viewport.height * T.marginY;
@@ -3574,7 +3881,7 @@ function drawClock(g) {
     g.save();
     g.textBaseline = 'middle';
     g.textAlign = horiz === 'left' ? 'left' : (horiz === 'right' ? 'right' : 'center');
-    const cx = horiz === 'left' ? mx : (horiz === 'right' ? viewport.width - mx : viewport.width / 2);
+    const cx = horiz === 'left' ? mx : (horiz === 'right' ? viewport.width - mx - buttonReserve : viewport.width / 2);
 
     const timeWeight = T.weight || 600;
     const dateWeight = Math.max(300, timeWeight - 200);
@@ -3582,20 +3889,45 @@ function drawClock(g) {
     const timeWidth = g.measureText(clockTime).width;
     g.font = dateWeight + ' ' + Math.round(dSize) + 'px ' + T.font;
     const dateWidth = g.measureText(clockDate).width;
+    const weather = liveWeather.state;
+    const weatherSize = Math.max(12, dSize * 0.68);
+    const weatherIconSize = weatherSize * 1.30;
+    const weatherTemperature = Number.isFinite(weather.temperature) ? Math.round(weather.temperature) + '°C' : '--°C';
+    g.font = '500 ' + Math.round(weatherSize) + 'px ' + T.font;
+    const weatherLeftWidth = weatherIconSize + weatherSize * 0.42 + g.measureText(weather.label).width;
+    const weatherRight = weather.location + '  ' + weatherTemperature;
+    const weatherRightWidth = g.measureText(weatherRight).width;
+    const weatherWidth = weatherLeftWidth + Math.max(18, weatherSize) + weatherRightWidth;
+    const contentWidth = Math.max(timeWidth, dateWidth, weatherWidth);
 
     // 时间在上、日期在下;整块的高度用来做垂直锚点
-    const blockH = tSize + gap + dSize;
+    const weatherGap = Math.max(8, dSize * 0.42);
+    const weatherHeight = weatherIconSize;
+    const blockH = tSize + gap + dSize + weatherGap + weatherHeight;
     const top = vert === 'top' ? my : viewport.height - my - blockH;
     const timeY = top + tSize / 2;
     const dateY = top + tSize + gap + dSize / 2;
+    const weatherY = top + tSize + gap + dSize + weatherGap + weatherHeight / 2;
+    const padX = tSize * 0.34, padY = tSize * 0.30;
+    const cardWidth = contentWidth + padX * 2 + buttonReserve;
+    const cardHeight = blockH + padY * 2;
+    const cardX = horiz === 'left'
+        ? cx - padX
+        : (horiz === 'right' ? cx - contentWidth - padX : cx - contentWidth / 2 - padX);
+    const cardY = top - padY;
 
     if (T.cardGlass) {
-        const padX = tSize * 0.34, padY = tSize * 0.30;
-        const cardWidth = Math.max(timeWidth, dateWidth) + padX * 2;
-        const cardHeight = blockH + padY * 2;
-        const cardX = horiz === 'left' ? cx - padX : (horiz === 'right' ? cx - cardWidth + padX : cx - cardWidth / 2);
-        drawFrostedCard(g, cardX, top - padY, cardWidth, cardHeight, short, T);
+        drawFrostedCard(g, cardX, cardY, cardWidth, cardHeight, short, T);
     }
+
+    const buttonX = Math.max(8, Math.min(viewport.width - buttonSize - 8, cardX + padX + contentWidth + buttonGap));
+    const buttonY = Math.max(8, Math.min(viewport.height - buttonSize - 8, top + (tSize - buttonSize) / 2));
+    settingsButton.hidden = false;
+    settingsButton.dataset.card = String(T.cardGlass === true);
+    settingsButton.style.left = buttonX.toFixed(1) + 'px';
+    settingsButton.style.top = buttonY.toFixed(1) + 'px';
+    settingsButton.style.width = settingsButton.style.height = buttonSize.toFixed(1) + 'px';
+    settingsButton.style.color = T.cardGlass ? T.cardTextColor : T.color;
 
     // 影子沿全局光向偏移 + 模糊 —— 和鱼的影子同一套光,才会像"在这个场景里"
     const off = short * T.shadowOffset;
@@ -3631,16 +3963,262 @@ function drawClock(g) {
 
     drawMainText(clockTime, cx, timeY, tSize, timeWeight);
     drawMainText(clockDate, cx, dateY, dSize, dateWeight);
+    const contentLeft = horiz === 'left' ? cx : (horiz === 'right' ? cx - contentWidth : cx - contentWidth / 2);
+    const weatherColor = T.cardGlass ? T.cardTextColor : T.color;
+    g.save();
+    g.globalAlpha = 0.82;
+    g.shadowColor = 'transparent';
+    drawWeatherIcon(g, contentLeft + weatherIconSize / 2, weatherY, weatherIconSize,
+        weatherIconKind(weather.code, weather.isDay), weatherColor);
+    g.fillStyle = weatherColor;
+    g.font = '500 ' + Math.round(weatherSize) + 'px ' + T.font;
+    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    g.fillText(weather.label, contentLeft + weatherIconSize + weatherSize * 0.42, weatherY);
+    g.textAlign = 'right';
+    g.fillText(weatherRight, contentLeft + contentWidth, weatherY);
+    g.restore();
     g.restore();
 }
 
-return { draw: drawClock };
+return {
+    draw: drawClock,
+    setEnabled(enabled) { settingsButton.hidden = !enabled || THEME.clock.show === false; },
+    dispose() {
+        settingsButton.removeEventListener('click', openSettings);
+        window.removeEventListener('koi:settings-state', syncSettingsState);
+        liveWeather.dispose();
+        settingsButton.remove();
+    }
+};
 }
 
 Object.assign(exports, { createClock });
 };
+__modules["src/ui/icons.js"] = function (exports, __require) {
+// Lucide Icons (ISC) — https://lucide.dev/
+// SVG paths are stored locally so the wallpaper remains fully offline.
+const ICONS = Object.freeze({
+    fish: '<path d="M16.69 7.44a7 7 0 0 0-9.38-1.26L5 7.5l-3-2v13l3-2 2.31 1.32a7 7 0 0 0 9.38-1.26"/><path d="M2 12h5"/><circle cx="16" cy="12" r=".5"/>',
+    waves: '<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5s2.5 2 5 2 2.5-2 5-2c1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2c1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2c1.3 0 1.9.5 2.5 1"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+    'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+    'circle-dot': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/>',
+    palette: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-.9-.5-1.3-.3-.4-.5-.8-.5-1.2a2 2 0 0 1 2-2h2.1A4.9 4.9 0 0 0 22 10.6 8.6 8.6 0 0 0 12 2Z"/>',
+    eraser: '<path d="m7 21-4-4a2.8 2.8 0 0 1 0-4L14 2a2.8 2.8 0 0 1 4 0l4 4a2.8 2.8 0 0 1 0 4L11 21a2.8 2.8 0 0 1-4 0Z"/><path d="m5 11 8 8M5 21h14"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z"/>',
+    trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 11v5M14 11v5"/>',
+    utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2V2M7 2v20M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+    sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+    check: '<path d="m5 12 4 4L19 6"/>'
+});
+function ensureIconStyles() {
+    if (document.getElementById('pond-icon-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'pond-icon-styles';
+    style.textContent = [
+        '.pond-icon{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}',
+        '.pond-icon--18{width:18px;height:18px}.pond-icon--20{width:20px;height:20px}',
+        '.pond-icon-button{display:inline-flex;align-items:center;justify-content:center;gap:7px}',
+        '.pond-icon-only{display:grid;place-items:center;padding:0}',
+        '.pond-icon-button,.pond-icon-only{transition:transform 150ms cubic-bezier(.16,1,.3,1),background-color 150ms ease-out,border-color 150ms ease-out,color 150ms ease-out,box-shadow 150ms ease-out,filter 150ms ease-out}',
+        '.pond-icon-button .pond-icon,.pond-icon-only .pond-icon{transition:transform 180ms cubic-bezier(.16,1,.3,1)}',
+        '.pond-icon-button:hover:not(:disabled),.pond-icon-only:hover:not(:disabled){transform:translateY(-1px)}',
+        '.pond-icon-button:hover:not(:disabled) .pond-icon,.pond-icon-only:hover:not(:disabled) .pond-icon{transform:scale(1.07)}',
+        '.pond-icon-button:active:not(:disabled),.pond-icon-only:active:not(:disabled){transform:translateY(0) scale(.97)}',
+        '@media(prefers-reduced-motion:reduce){.pond-icon-button,.pond-icon-only,.pond-icon-button .pond-icon,.pond-icon-only .pond-icon{transition-duration:80ms}.pond-icon-button:hover:not(:disabled),.pond-icon-only:hover:not(:disabled),.pond-icon-button:hover:not(:disabled) .pond-icon,.pond-icon-only:hover:not(:disabled) .pond-icon{transform:none}}'
+    ].join('\n');
+    document.head.appendChild(style);
+}
+
+const visibilityAnimations = new WeakMap();
+function setAnimatedVisibility(element, open) {
+    const previous = visibilityAnimations.get(element);
+    if (previous) previous.cancel();
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (open) element.hidden = false;
+    if (typeof element.animate !== 'function') {
+        element.hidden = !open;
+        return Promise.resolve();
+    }
+    const frames = reduced
+        ? [{ opacity: open ? 0 : 1 }, { opacity: open ? 1 : 0 }]
+        : open
+            ? [{ opacity: 0, scale: '.97', filter: 'blur(7px)', clipPath: 'inset(0 0 5% 0 round 16px)' }, { opacity: 1, scale: '1', filter: 'blur(0)', clipPath: 'inset(0 0 0 0 round 16px)' }]
+            : [{ opacity: 1, scale: '1', filter: 'blur(0)' }, { opacity: 0, scale: '.985', filter: 'blur(5px)' }];
+    const animation = element.animate(frames, {
+        duration: reduced ? 110 : (open ? 300 : 180),
+        easing: open ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.4,0,1,1)',
+        fill: 'both'
+    });
+    visibilityAnimations.set(element, animation);
+    return animation.finished.catch(() => {}).then(() => {
+        if (visibilityAnimations.get(element) !== animation) return;
+        visibilityAnimations.delete(element);
+        animation.cancel();
+        if (!open) element.hidden = true;
+    });
+}
+function icon(name, className = 'pond-icon') {
+    if (!ICONS[name]) throw new Error('Unknown pond icon: ' + name);
+    return '<svg class="' + className + '" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' + ICONS[name] + '</svg>';
+}
+function iconLabel(name, label) {
+    return icon(name) + '<span>' + label + '</span>';
+}
+
+Object.assign(exports, { ensureIconStyles, setAnimatedVisibility, icon, iconLabel });
+};
+__modules["src/features/live-weather.js"] = function (exports, __require) {
+const GEOCODING_API = 'https://geocoding-api.open-meteo.com/v1/search';
+const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
+const REFRESH_INTERVAL = 30 * 60 * 1000;
+function describeWeatherCode(value, isDay = 1) {
+    const code = Number(value);
+    if (code === 0) return isDay ? '晴朗' : '晴夜';
+    if (code <= 2) return '多云';
+    if (code === 3) return '阴天';
+    if (code <= 48) return '有雾';
+    if (code <= 57) return '毛毛雨';
+    if (code <= 67) return '有雨';
+    if (code <= 77) return '有雪';
+    if (code <= 82) return '阵雨';
+    if (code <= 86) return '阵雪';
+    if (code >= 95) return '雷雨';
+    return '天气';
+}
+function weatherIconKind(value, isDay = 1) {
+    const code = Number(value);
+    if (code === 0) return isDay ? 'sun' : 'moon';
+    if (code <= 2) return 'partly-cloudy';
+    if (code <= 3) return 'cloud';
+    if (code <= 48) return 'fog';
+    if (code <= 67 || (code >= 80 && code <= 82)) return 'rain';
+    if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return 'snow';
+    if (code >= 95) return 'thunder';
+    return 'cloud';
+}
+
+function inferredCity() {
+    const requested = new URLSearchParams(globalThis.location?.search || '').get('weatherCity');
+    if (requested?.trim()) return requested.trim();
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const city = timezone.split('/').pop()?.replaceAll('_', ' ').trim();
+    return city && !/^(utc|gmt)$/i.test(city) ? city : 'Shanghai';
+}
+
+async function requestJson(url, signal) {
+    const response = await fetch(url, { signal });
+    if (!response.ok) throw new Error('Weather request failed: ' + response.status);
+    return response.json();
+}
+function createLiveWeather() {
+    const state = {
+        location: inferredCity(),
+        temperature: null,
+        code: null,
+        isDay: 1,
+        label: '天气更新中',
+        status: 'loading'
+    };
+    let disposed = false;
+    let controller = null;
+
+    async function refresh() {
+        controller?.abort();
+        controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+            const query = inferredCity();
+            const geocodingUrl = GEOCODING_API + '?name=' + encodeURIComponent(query) + '&count=1&language=zh&format=json';
+            const geocoding = await requestJson(geocodingUrl, controller.signal);
+            const place = geocoding.results?.[0];
+            if (!place) throw new Error('Weather location not found');
+            const forecastUrl = FORECAST_API + '?latitude=' + encodeURIComponent(place.latitude) +
+                '&longitude=' + encodeURIComponent(place.longitude) +
+                '&current=temperature_2m,weather_code,is_day&temperature_unit=celsius&timezone=auto&forecast_days=1';
+            const forecast = await requestJson(forecastUrl, controller.signal);
+            if (disposed) return;
+            state.location = place.name || query;
+            state.temperature = Number(forecast.current?.temperature_2m);
+            state.code = Number(forecast.current?.weather_code);
+            state.isDay = Number(forecast.current?.is_day) !== 0 ? 1 : 0;
+            state.label = describeWeatherCode(state.code, state.isDay);
+            state.status = 'ready';
+        } catch (error) {
+            if (disposed || error?.name === 'AbortError') return;
+            state.label = '天气暂不可用';
+            state.status = 'error';
+            console.warn('[koi] Open-Meteo 天气更新失败:', error);
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    refresh();
+    const timer = setInterval(refresh, REFRESH_INTERVAL);
+    return {
+        state,
+        refresh,
+        dispose() {
+            disposed = true;
+            clearInterval(timer);
+            controller?.abort();
+        }
+    };
+}
+
+Object.assign(exports, { describeWeatherCode, weatherIconKind, createLiveWeather });
+};
 __modules["src/features/feeding.js"] = function (exports, __require) {
-function createFeeding({ config, foods, Food, spawnRipple }) {
+const { ensureIconStyles, icon } = __require("src/ui/icons.js");
+function createFeeding({ config, foods, Food, spawnRipple, input }) {
+ensureIconStyles();
+const button = document.createElement('button');
+button.className = 'feeding-toggle pond-icon-only';
+button.type = 'button';
+button.innerHTML = icon('utensils', 'pond-icon pond-icon--20');
+button.title = '喂食';
+button.setAttribute('aria-pressed', 'false');
+button.setAttribute('aria-label', '开启投喂模式');
+document.body.appendChild(button);
+const settingsButton = document.querySelector('.clock-settings-button');
+let buttonLayout = '';
+
+let feeding = false;
+function setFeeding(next) {
+    feeding = !!next && config.enableFeeding;
+    input.setMode(feeding ? 'feed' : 'startle');
+    button.title = feeding ? '退出投喂模式' : '喂食';
+    button.setAttribute('aria-pressed', String(feeding));
+    button.setAttribute('aria-label', feeding ? '关闭投喂模式' : '开启投喂模式');
+}
+button.addEventListener('click', () => setFeeding(!feeding));
+
+function syncButtonPosition() {
+    if (!settingsButton || settingsButton.hidden) return;
+    const size = Number.parseFloat(settingsButton.style.width) || 40;
+    const left = settingsButton.style.left;
+    const top = Number.parseFloat(settingsButton.style.top) || 0;
+    const layout = left + '|' + top + '|' + size;
+    if (layout === buttonLayout) return;
+    buttonLayout = layout;
+    button.style.left = left;
+    button.style.right = 'auto';
+    button.style.top = (top + (size + 8) * 2) + 'px';
+    button.style.bottom = 'auto';
+    button.style.width = size + 'px';
+    button.style.height = size + 'px';
+}
+
+function startleAt(x, y) {
+    spawnRipple(x, y, 1.5 * config.rippleStrength);
+}
+
 function feedAt(x, y) {
     if (config.enableFeeding) {
         // 一次撒一小把饲料,而不是一粒。
@@ -3663,7 +4241,16 @@ function feedAt(x, y) {
     spawnRipple(x, y, 1.5 * config.rippleStrength);
 }
 
-return { feedAt };
+return {
+    interactions: { startle: startleAt, feed: feedAt },
+    update: syncButtonPosition,
+    setEnabled(next) {
+        config.enableFeeding = !!next;
+        button.disabled = !config.enableFeeding;
+        if (!config.enableFeeding) setFeeding(false);
+    },
+    dispose() { button.remove(); }
+};
 }
 
 Object.assign(exports, { createFeeding });
@@ -3671,6 +4258,7 @@ Object.assign(exports, { createFeeding });
 __modules["src/features/fish-manager.js"] = function (exports, __require) {
 const { KOI_SHAPE } = __require("src/shared/legacy-assets.js");
 const { noseColorOf } = __require("src/render/fish-skin.js");
+const { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } = __require("src/ui/icons.js");
 const STORE_KEY = 'koi.user.fish.v2';
 const MAX_FISH = 24;
 const BOARD_W = 720;
@@ -3693,23 +4281,24 @@ function addStyles() {
     const style = document.createElement('style');
     style.id = 'fish-manager-styles';
     style.textContent = [
-        '.fish-manager{--bg-top:rgba(18,71,67,.30);--bg:rgba(9,47,45,.30);--surface-1:rgba(224,255,246,.07);--surface-2:rgba(230,255,248,.11);--stroke:rgba(202,239,228,.18);--text:#f7fffb;--muted:rgba(226,245,238,.74);--accent:#f5a23e;--accent-ink:#2b2114;--control:#ef9131;--track:rgba(210,237,228,.24);position:fixed;inset:16px;z-index:40;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
+        '.fish-manager{--bg-top:var(--pond-ui-bg-top);--bg:var(--pond-ui-bg);--surface-1:var(--pond-ui-surface-1);--surface-2:var(--pond-ui-surface-2);--stroke:var(--pond-ui-stroke);--text:var(--pond-ui-text);--muted:var(--pond-ui-muted);--accent:var(--pond-ui-accent);--accent-ink:var(--pond-ui-accent-ink);--control:var(--pond-ui-primary);--track:rgba(210,237,228,.24);position:fixed;inset:16px;z-index:40;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
         '.fish-manager *{box-sizing:border-box}.fish-manager button,.fish-manager input,.fish-manager select{font:inherit}',
-        '.fish-manager__toggle{pointer-events:auto;position:absolute;right:0;top:0;height:40px;padding:0 15px;border:1px solid var(--stroke);border-radius:10px;background:linear-gradient(180deg,var(--bg-top),var(--bg));box-shadow:0 12px 30px rgba(0,24,22,.28);color:#fff;cursor:pointer}',
-        '.fish-manager__panel{pointer-events:auto;position:absolute;right:0;top:0;width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:18px;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3);scrollbar-color:rgba(242,175,92,.72) rgba(255,255,255,.06)}',
-        '.fish-manager__panel[hidden],.fish-manager__toggle[hidden]{display:none}.fish-manager__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.fish-manager__title{margin:0;font-size:15px;font-weight:700}.fish-manager__hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}',
-        '.fish-manager__close,.fish-manager__button{height:32px;padding:0 14px;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:#fff;cursor:pointer}.fish-manager button:hover{filter:brightness(1.10)}.fish-manager button:focus-visible,.fish-manager input:focus-visible,.fish-manager select:focus-visible{outline:2px solid #ffc66f;outline-offset:2px}.fish-manager__button--primary{height:36px;background:var(--accent);color:var(--accent-ink);font-weight:750;text-shadow:none}.fish-manager__button--danger{background:rgba(194,66,48,.46)}',
+        '.fish-manager__toggle{pointer-events:auto;position:fixed;right:16px;top:16px;display:grid;place-items:center;width:40px;height:40px;padding:0;border:1px solid currentColor;border-radius:11px;background:rgba(6,34,31,.20);box-shadow:0 8px 22px rgba(0,28,25,.16);color:rgba(244,252,248,.88);opacity:.76;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:opacity 160ms ease-out,background-color 160ms ease-out,transform 160ms ease-out}',
+        '.fish-manager__panel{pointer-events:auto;position:absolute;left:50%;top:50%;right:auto;transform:translate(-50%,-50%);width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:18px;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3);scrollbar-color:var(--pond-ui-primary) rgba(255,255,255,.06)}',
+        '.fish-manager__panel[hidden],.fish-manager__toggle[hidden]{display:none}.fish-manager__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.fish-manager__title,.fish-manager__section-title--icon{display:flex;align-items:center;gap:7px}.fish-manager__title{margin:0;font-size:15px;font-weight:700}.fish-manager__hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}',
+        '.fish-manager__close,.fish-manager__button{height:32px;padding:0 14px;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:#fff;cursor:pointer}.fish-manager__close{width:32px;padding:0}.fish-manager button:hover{filter:brightness(1.10)}.fish-manager__toggle:hover{opacity:1;filter:none}.fish-manager button:focus-visible,.fish-manager input:focus-visible,.fish-manager select:focus-visible{outline:2px solid var(--pond-ui-focus);outline-offset:2px}.fish-manager__button--primary{height:36px;background:var(--accent);color:var(--accent-ink);font-weight:750;text-shadow:none}.fish-manager__button--danger{background:rgba(194,66,48,.46)}',
         '.fish-manager__layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,350px);grid-template-rows:auto auto;gap:14px}.fish-manager__card{padding:14px;border:1px solid rgba(222,255,246,.08);border-radius:13px;background:var(--surface-1)}.fish-manager__section-title{margin:0 0 10px;font-size:15px;font-weight:750}',
         '.fish-manager__form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.fish-manager__field{display:grid;gap:5px}.fish-manager__field label{color:var(--muted);font-size:12.5px}.fish-manager__field input,.fish-manager__field select{width:100%;height:30px;padding:0 9px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2);color:#fff}.fish-manager__field select option{color:#182b2c}.fish-manager__field input[type=color]{padding:2px}.fish-manager__field input[type=range]{height:18px;padding:0;border:0;background:transparent;accent-color:var(--control)}.fish-manager__range-value{color:var(--accent);font-variant-numeric:tabular-nums}',
         '.fish-manager__editor-card{grid-column:1;grid-row:1}.fish-manager__list-card{grid-column:2;grid-row:1/span 2}.fish-manager__board-card{grid-column:1;grid-row:2}.fish-manager__board-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.fish-manager__tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.fish-manager__tools input[type=color]{width:42px;height:30px;padding:2px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2)}.fish-manager__tools input[type=range]{width:120px;accent-color:var(--control)}',
         '.fish-manager__canvas-wrap{width:100%;min-height:360px;border:1px solid rgba(163,224,207,.18);border-radius:13px;overflow:hidden;background:#073936;box-shadow:inset 0 0 46px rgba(0,15,14,.44);touch-action:none}.fish-manager__canvas{display:block;width:100%;height:auto;min-height:360px;cursor:crosshair}.fish-manager__board-note{margin:8px 0 0;color:var(--muted);font-size:12.5px}.fish-manager__actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}',
-        '.fish-manager__list{display:grid;gap:9px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}.fish-manager__empty{display:grid;place-items:center;min-height:280px;color:var(--muted);text-align:center;white-space:pre-line}.fish-manager__fish{padding:12px;border:1px solid rgba(222,255,246,.08);border-radius:11px;background:rgba(217,255,244,.06)}.fish-manager__fish-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.fish-manager__fish-name{font-weight:700}.fish-manager__fish-kind{color:var(--muted);font-size:12.5px}.fish-manager__favorite{border:0;background:transparent;color:rgba(255,255,255,.55);font-size:20px;cursor:pointer}.fish-manager__favorite[aria-pressed=true]{color:var(--accent)}',
+        '.fish-manager__list{display:grid;gap:9px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}.fish-manager__empty{display:grid;place-items:center;min-height:280px;color:var(--muted);text-align:center;white-space:pre-line}.fish-manager__fish{padding:12px;border:1px solid rgba(222,255,246,.08);border-radius:11px;background:rgba(217,255,244,.06)}.fish-manager__fish-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.fish-manager__fish-name{font-weight:700}.fish-manager__fish-kind{color:var(--muted);font-size:12.5px}.fish-manager__favorite{width:34px;height:34px;border:0;border-radius:9px;background:transparent;color:rgba(255,255,255,.55);cursor:pointer}.fish-manager__favorite:hover{background:var(--surface-2)}.fish-manager__favorite[aria-pressed=true]{color:var(--accent)}.fish-manager__favorite[aria-pressed=true] .pond-icon{fill:currentColor}',
         '.fish-manager__stats{display:grid;gap:7px;margin-top:10px}.fish-manager__stat{display:grid;grid-template-columns:58px 1fr 48px;align-items:center;gap:8px}.fish-manager__track{height:11px;border-radius:999px;background:var(--track);overflow:hidden}.fish-manager__fill{height:100%;border-radius:999px;background:var(--accent)}.fish-manager__value{text-align:right;color:var(--accent);font-variant-numeric:tabular-nums}.fish-manager__fish-actions{display:flex;justify-content:flex-end;margin-top:8px}.fish-manager__status{min-height:20px;margin:8px 0 0;color:var(--muted);font-size:12.5px}',
         '@media(max-width:900px){.fish-manager{inset:8px}.fish-manager__panel{width:calc(100vw - 16px);max-height:calc(100vh - 16px);padding:12px}.fish-manager__layout{grid-template-columns:1fr;grid-template-rows:auto}.fish-manager__editor-card,.fish-manager__list-card,.fish-manager__board-card{grid-column:1;grid-row:auto}.fish-manager__list-card{order:3}.fish-manager__form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.fish-manager__canvas-wrap,.fish-manager__canvas{min-height:260px}.fish-manager__list{max-height:460px}}'
     ].join('\n');
     document.head.appendChild(style);
 }
 function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, repository }) {
+    ensureIconStyles();
     addStyles();
     const breedById = new Map(koiType.breeds.map(breed => [breed.id, breed]));
     let definitions = [];
@@ -3839,9 +4428,9 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
     const shell = document.createElement('aside');
     shell.className = 'fish-manager';
     shell.innerHTML = [
-        '<button class="fish-manager__toggle" type="button" hidden>🐟 我的鱼</button>',
-        '<section class="fish-manager__panel" aria-label="鱼设置">',
-        '<header class="fish-manager__header"><div><h1 class="fish-manager__title">🐟 鱼设置</h1><p class="fish-manager__hint">池塘只显示你添加的鱼，外观与状态自动保存到本地数据库</p></div><button class="fish-manager__close" type="button">收起</button></header>',
+        '<button class="fish-manager__toggle pond-icon-only" type="button" aria-label="打开鱼设置" aria-haspopup="dialog" aria-expanded="false" title="鱼设置">' + icon('fish', 'pond-icon pond-icon--20') + '</button>',
+        '<section class="fish-manager__panel" aria-label="鱼设置" hidden>',
+        '<header class="fish-manager__header"><div><h1 class="fish-manager__title">' + icon('fish', 'pond-icon pond-icon--18') + '<span>鱼设置</span></h1><p class="fish-manager__hint">池塘只显示你添加的鱼，外观与状态自动保存到本地数据库</p></div><button class="fish-manager__close pond-icon-only" type="button" aria-label="收起鱼设置" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<div class="fish-manager__layout">',
         '<section class="fish-manager__card fish-manager__editor-card"><h2 class="fish-manager__section-title">加入一只鱼</h2><div class="fish-manager__form-grid">',
         '<div class="fish-manager__field"><label>名字</label><input data-name maxlength="16" placeholder="给它起个名字"></div>',
@@ -3855,10 +4444,10 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
         '</div></section>',
         '<section class="fish-manager__card fish-manager__list-card"><h2 class="fish-manager__section-title">我的鱼</h2><div class="fish-manager__list" data-list></div></section>',
         '<section class="fish-manager__card fish-manager__board-card">',
-        '<div class="fish-manager__board-head"><div><h2 class="fish-manager__section-title">🎨 大画板</h2><span class="fish-manager__hint">直接在鱼身上手绘图案</span></div><div class="fish-manager__tools"><label>画笔</label><input data-brush-color type="color" value="#d94f28"><label>粗细</label><input data-brush-size type="range" min="3" max="48" value="18"><button class="fish-manager__button" data-clear type="button">清空图案</button></div></div>',
+        '<div class="fish-manager__board-head"><div><h2 class="fish-manager__section-title fish-manager__section-title--icon">' + icon('palette') + '<span>大画板</span></h2><span class="fish-manager__hint">直接在鱼身上手绘图案</span></div><div class="fish-manager__tools"><label>画笔</label><input data-brush-color type="color" value="#d94f28"><label>粗细</label><input data-brush-size type="range" min="3" max="48" value="18"><button class="fish-manager__button pond-icon-button" data-clear type="button">' + iconLabel('eraser', '清空图案') + '</button></div></div>',
         '<div class="fish-manager__canvas-wrap"><canvas class="fish-manager__canvas" data-board width="720" height="320"></canvas></div>',
         '<p class="fish-manager__board-note">画板会按鱼的身体轮廓裁切；空白区域使用上方选择的身体颜色。</p>',
-        '<div class="fish-manager__actions"><button class="fish-manager__button fish-manager__button--primary" data-add type="button">加入池塘</button></div>',
+        '<div class="fish-manager__actions"><button class="fish-manager__button fish-manager__button--primary pond-icon-button" data-add type="button">' + iconLabel('plus', '加入池塘') + '</button></div>',
         '<p class="fish-manager__status" data-status role="status"></p>',
         '</section></div></section>'
     ].join('');
@@ -3866,6 +4455,8 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
 
     const panel = shell.querySelector('.fish-manager__panel');
     const toggle = shell.querySelector('.fish-manager__toggle');
+    const settingsButton = document.querySelector('.clock-settings-button');
+    let toggleLayout = '';
     const nameInput = shell.querySelector('[data-name]');
     const breedInput = shell.querySelector('[data-breed]');
     const colorInput = shell.querySelector('[data-color]');
@@ -4250,10 +4841,10 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
             kind.textContent = (breedById.get(definition.breedId)?.name || '淡水鱼') + ' · ' + definition.name;
             identity.append(fishName, kind);
             const favorite = document.createElement('button');
-            favorite.className = 'fish-manager__favorite';
+            favorite.className = 'fish-manager__favorite pond-icon-only';
             favorite.type = 'button';
-            favorite.textContent = '★';
-            favorite.setAttribute('aria-label', '收藏');
+            favorite.innerHTML = icon('heart', 'pond-icon pond-icon--18');
+            favorite.setAttribute('aria-label', definition.favorite ? '取消收藏' : '收藏');
             favorite.setAttribute('aria-pressed', String(definition.favorite === true));
             favorite.addEventListener('click', () => {
                 definition.favorite = !definition.favorite;
@@ -4278,9 +4869,9 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
             const actions = document.createElement('div');
             actions.className = 'fish-manager__fish-actions';
             const remove = document.createElement('button');
-            remove.className = 'fish-manager__button fish-manager__button--danger';
+            remove.className = 'fish-manager__button fish-manager__button--danger pond-icon-button';
             remove.type = 'button';
-            remove.textContent = '删除';
+            remove.innerHTML = iconLabel('trash', '删除');
             remove.addEventListener('click', () => {
                 definitions = definitions.filter(item => item.id !== definition.id);
                 storeUserManaged = true;
@@ -4331,9 +4922,25 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
+        toggle.setAttribute('aria-expanded', String(open));
         if (open) renderBoard();
+    }
+
+    function syncTogglePosition() {
+        if (!settingsButton || settingsButton.hidden) return;
+        const size = Number.parseFloat(settingsButton.style.width) || 40;
+        const left = settingsButton.style.left;
+        const top = Number.parseFloat(settingsButton.style.top) || 0;
+        const layout = left + '|' + top + '|' + size;
+        if (layout === toggleLayout) return;
+        toggleLayout = layout;
+        toggle.style.left = left;
+        toggle.style.right = 'auto';
+        toggle.style.top = (top + size + 8) + 'px';
+        toggle.style.width = size + 'px';
+        toggle.style.height = size + 'px';
     }
 
     breedInput.addEventListener('change', () => applyBreedDefaults(false));
@@ -4369,6 +4976,7 @@ function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, 
         loadCustomFishFromStore() { loadDefinitions(); syncFish(); renderList(); },
         syncCustomFish: syncFish,
         update(dt) {
+            syncTogglePosition();
             statsElapsed += dt;
             saveElapsed += dt;
             if (!panel.hidden) boardWaveTime += dt;
@@ -4699,7 +5307,7 @@ function createIdleDrift({ config, viewport, foods, input, mouse, kois }) {
             /* 注入一次"鼠标在这儿":behavior 的躲鼠标分支会真的把附近的鱼赶散。
              * 只注入一次、不每帧重写 —— 用户真去动鼠标时,桥推来的位置会自然覆盖它
              * (这正好是自持事件的场景:没人操作的时候才有这些事件)。 */
-            input.move(it.x, it.y);
+            input.startle(it.x, it.y);
             holds.push({ x: it.x, y: it.y, left: (P.startle && P.startle.hold) || 0.42 });
             startled += near;
         }
@@ -5163,7 +5771,145 @@ function createDayCycle({ config, environment }) {
 
 Object.assign(exports, { createDayCycle });
 };
+__modules["src/ui/settings-panel.js"] = function (exports, __require) {
+const { createFishDebugPanel } = __require("src/ui/fish-debug-panel.js");
+const { createRippleDebugPanel } = __require("src/ui/ripple-debug-panel.js");
+const { createClockDebugPanel } = __require("src/ui/clock-debug-panel.js");
+const { ensureIconStyles, icon, setAnimatedVisibility } = __require("src/ui/icons.js");
+function addStyles() {
+    if (document.getElementById('pond-settings-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'pond-settings-styles';
+    style.textContent = [
+        '.pond-settings{--bg-top:var(--pond-ui-bg-top);--bg:var(--pond-ui-bg);--surface-1:var(--pond-ui-surface-1);--surface-2:var(--pond-ui-surface-2);--stroke:var(--pond-ui-stroke);--text:var(--pond-ui-text);--muted:var(--pond-ui-muted);--accent:var(--pond-ui-accent);--accent-ink:var(--pond-ui-accent-ink);position:fixed;inset:16px;z-index:42;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
+        '.pond-settings *{box-sizing:border-box}.pond-settings button,.pond-settings input,.pond-settings select,.pond-settings textarea{font:inherit}',
+        '.pond-settings__panel{pointer-events:auto;position:absolute;left:50%;top:50%;right:auto;transform:translate(-50%,-50%);width:min(960px,calc(100vw - 40px));height:min(820px,calc(100vh - 40px));display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3)}',
+        '.pond-settings__panel[hidden],.pond-settings__page[hidden]{display:none}',
+        '.pond-settings__header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 24px 20px;border-bottom:1px solid rgba(222,255,246,.10)}',
+        '.pond-settings__title{margin:0;font-size:17px;line-height:1.25;font-weight:750;letter-spacing:-.02em}.pond-settings__hint{margin:3px 0 0;color:var(--muted);font-size:12.5px}',
+        '.pond-settings__close{width:36px;height:36px;padding:0;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:var(--text);cursor:pointer}',
+        '.pond-settings__layout{min-height:0;display:grid;grid-template-columns:196px minmax(0,1fr)}',
+        '.pond-settings__nav{display:flex;flex-direction:column;gap:10px;padding:20px 16px;border-right:1px solid rgba(222,255,246,.10);background:rgba(2,32,30,.20)}',
+        '.pond-settings__nav-title{margin:1px 8px 9px;color:var(--muted);font-size:11.5px;font-weight:700;letter-spacing:.08em}',
+        '.pond-settings__nav-button{min-height:44px;display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:9px;padding:0 11px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);text-align:left;cursor:pointer;transition:transform 160ms cubic-bezier(.16,1,.3,1),background-color 160ms ease-out,border-color 160ms ease-out,color 160ms ease-out}',
+        '.pond-settings__nav-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--surface-1);color:var(--text);font-size:12px;font-weight:800;text-shadow:none}',
+        '.pond-settings__nav-arrow{color:transparent;font-size:16px;transition:transform 180ms cubic-bezier(.16,1,.3,1),color 160ms ease-out}.pond-settings__nav-button:hover{background:var(--surface-1);color:var(--text);transform:translateX(2px)}.pond-settings__nav-button:active{transform:translateX(1px) scale(.985)}',
+        '.pond-settings__nav-button[aria-selected="true"]{border-color:var(--pond-ui-primary-border);background:var(--pond-ui-primary-soft);color:var(--text);font-weight:700}.pond-settings__nav-button[aria-selected="true"] .pond-settings__nav-icon{background:var(--accent);color:var(--accent-ink)}.pond-settings__nav-button[aria-selected="true"] .pond-settings__nav-arrow{color:var(--accent)}',
+        '.pond-settings__content{min-width:0;min-height:0;overflow:auto;padding:28px 32px 36px;scrollbar-color:var(--pond-ui-primary) rgba(255,255,255,.06)}',
+        '.pond-settings__page{width:100%;max-width:720px;margin:0 auto}.pond-settings__page:not([hidden]){animation:pond-settings-page-in 220ms cubic-bezier(.16,1,.3,1)}.pond-settings__page-head{margin:0 0 8px;padding:0 0 18px;border-bottom:1px solid rgba(222,255,246,.10)}.pond-settings__page-title{margin:0;font-size:17px;font-weight:750}.pond-settings__page-hint{margin:5px 0 0;color:var(--muted);font-size:12.5px}',
+        '.pond-settings .fish-debug,.pond-settings .ripple-debug,.pond-settings .clock-debug{position:static;inset:auto;width:auto;color:var(--text);font:inherit;text-shadow:inherit}',
+        '.pond-settings .fish-debug__panel,.pond-settings .ripple-debug__panel,.pond-settings .clock-debug__panel{position:static;width:auto;max-height:none;overflow:visible;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}',
+        '.pond-settings .fish-debug__head,.pond-settings .ripple-debug__head,.pond-settings .clock-debug__head,.pond-settings .fish-debug__toggle,.pond-settings .ripple-debug__toggle,.pond-settings .clock-debug__toggle{display:none}',
+        '.pond-settings .fish-debug__section,.pond-settings .ripple-debug__section,.pond-settings .clock-debug__section{padding:26px 0;border-top-color:rgba(222,255,246,.10)}',
+        '.pond-settings .fish-debug__section:first-of-type,.pond-settings .ripple-debug__section:first-of-type,.pond-settings .clock-debug__section:first-of-type{border-top:0}',
+        '.pond-settings .fish-debug__legend,.pond-settings .ripple-debug__legend,.pond-settings .clock-debug__legend{padding-bottom:14px}',
+        '.pond-settings .fish-debug__field,.pond-settings .ripple-debug__field,.pond-settings .clock-debug__field{margin-bottom:18px}',
+        '.pond-settings .fish-debug__actions,.pond-settings .ripple-debug__actions,.pond-settings .clock-debug__actions{margin-top:8px;padding-top:24px;border-top:1px solid rgba(222,255,246,.10)}',
+        '.pond-settings .fish-debug__legend,.pond-settings .ripple-debug__legend,.pond-settings .clock-debug__legend{color:var(--text)}',
+        '.pond-settings .fish-debug__field label,.pond-settings .ripple-debug__field label,.pond-settings .clock-debug__field label{color:var(--muted)}',
+        '.pond-settings .fish-debug__value,.pond-settings .ripple-debug__value,.pond-settings .clock-debug__value,.pond-settings .fish-debug__metric-value{color:var(--accent)}',
+        '.pond-settings input[type="range"]{accent-color:var(--pond-ui-primary)}',
+        '.pond-settings .fish-debug__button,.pond-settings .ripple-debug__button,.pond-settings .clock-debug__button{min-height:40px;border-color:var(--stroke);border-radius:9px;background:var(--surface-2);color:var(--text)}',
+        '.pond-settings .fish-debug__button--primary,.pond-settings .ripple-debug__button--primary,.pond-settings .clock-debug__button--primary{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);text-shadow:none}',
+        '.pond-settings button:hover{filter:brightness(1.10)}.pond-settings button:focus-visible,.pond-settings input:focus-visible,.pond-settings select:focus-visible,.pond-settings textarea:focus-visible{outline:2px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@keyframes pond-settings-page-in{from{opacity:0;transform:translateX(10px);filter:blur(3px)}to{opacity:1;transform:translateX(0);filter:blur(0)}}',
+        '@media(max-width:720px){.pond-settings{inset:8px}.pond-settings__panel{width:calc(100vw - 16px);height:calc(100vh - 16px)}.pond-settings__header{padding:18px 16px 16px}.pond-settings__layout{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.pond-settings__nav{flex-direction:row;overflow-x:auto;padding:10px;border-right:0;border-bottom:1px solid rgba(222,255,246,.10)}.pond-settings__nav-title{display:none}.pond-settings__nav-button{flex:0 0 auto;grid-template-columns:24px auto;min-height:42px}.pond-settings__nav-icon{width:24px;height:24px}.pond-settings__nav-arrow{display:none}.pond-settings__content{padding:18px 16px 24px}.pond-settings .fish-debug__section,.pond-settings .ripple-debug__section,.pond-settings .clock-debug__section{padding:22px 0}}',
+        '@media(prefers-reduced-motion:reduce){.pond-settings__page:not([hidden]){animation:pond-settings-page-fade 100ms ease-out}.pond-settings__nav-button,.pond-settings__nav-arrow{transition-duration:80ms}.pond-settings__nav-button:hover,.pond-settings__nav-button:active{transform:none}}',
+        '@keyframes pond-settings-page-fade{from{opacity:.72}to{opacity:1}}',
+        '@media(prefers-reduced-transparency:reduce){.pond-settings__panel{background:#092f2d;backdrop-filter:none}}'
+    ].join('\n');
+    document.head.appendChild(style);
+}
+function createSettingsPanel({ kois, config, types, viewport, spawnRipple, repository }) {
+    ensureIconStyles();
+    addStyles();
+    const fish = createFishDebugPanel({ kois, config, types, repository, embedded: true });
+    const ripple = createRippleDebugPanel({ config, viewport, spawnRipple, repository, embedded: true });
+    const clock = createClockDebugPanel({ repository, embedded: true });
+    const definitions = [
+        { id: 'fish', title: '鱼外观', hint: '鱼群运动与质感参数', icon: 'fish', instance: fish },
+        { id: 'ripple', title: '波纹', hint: '水面波纹的形状、外观与运动', icon: 'waves', instance: ripple },
+        { id: 'clock', title: '时间样式', hint: '画面时钟、文字与毛玻璃卡片', icon: 'clock', instance: clock }
+    ];
+
+    const shell = document.createElement('aside');
+    shell.className = 'pond-settings';
+    shell.setAttribute('aria-label', '鱼池设置');
+    shell.innerHTML = [
+        '<section class="pond-settings__panel" role="dialog" aria-modal="false" aria-label="设置" hidden>',
+        '<header class="pond-settings__header"><div><h2 class="pond-settings__title">设置</h2><p class="pond-settings__hint">统一调整鱼群、波纹与时间样式</p></div><button class="pond-settings__close pond-icon-only" type="button" aria-label="收起设置" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
+        '<div class="pond-settings__layout">',
+        '<nav class="pond-settings__nav" aria-label="设置分类"><p class="pond-settings__nav-title">设置分类</p>',
+        definitions.map(item => '<button class="pond-settings__nav-button" type="button" role="tab" data-page="' + item.id + '" aria-selected="false"><span class="pond-settings__nav-icon" aria-hidden="true">' + icon(item.icon, 'pond-icon pond-icon--18') + '</span><span>' + item.title + '</span><span class="pond-settings__nav-arrow" aria-hidden="true">' + icon('chevron-right') + '</span></button>').join(''),
+        '</nav><div class="pond-settings__content"></div></div></section>'
+    ].join('');
+    document.body.appendChild(shell);
+
+    const panel = shell.querySelector('.pond-settings__panel');
+    const close = shell.querySelector('.pond-settings__close');
+    const content = shell.querySelector('.pond-settings__content');
+    const buttons = Array.from(shell.querySelectorAll('[data-page]'));
+    const pages = new Map();
+    let activePage = 'fish';
+
+    for (const item of definitions) {
+        const page = document.createElement('section');
+        page.className = 'pond-settings__page';
+        page.dataset.settingsPage = item.id;
+        page.setAttribute('role', 'tabpanel');
+        page.innerHTML = '<header class="pond-settings__page-head"><h3 class="pond-settings__page-title">' + item.title + '</h3><p class="pond-settings__page-hint">' + item.hint + '</p></header>';
+        page.appendChild(item.instance.element);
+        content.appendChild(page);
+        pages.set(item.id, page);
+    }
+
+    function setPage(id, focus = false) {
+        if (!pages.has(id)) return;
+        activePage = id;
+        for (const [pageId, page] of pages) page.hidden = pageId !== id;
+        for (const button of buttons) {
+            const selected = button.dataset.page === id;
+            button.setAttribute('aria-selected', String(selected));
+            button.tabIndex = selected ? 0 : -1;
+            if (selected && focus) button.focus();
+        }
+        content.scrollTop = 0;
+    }
+
+    function setOpen(open, pageId = activePage) {
+        setPage(pageId);
+        setAnimatedVisibility(panel, open);
+        window.dispatchEvent(new CustomEvent('koi:settings-state', { detail: { open } }));
+        if (open) buttons.find(button => button.dataset.page === activePage)?.focus();
+        else document.querySelector('.clock-settings-button')?.focus();
+    }
+
+    function onOpenRequest(event) {
+        setOpen(true, event.detail?.page || activePage);
+    }
+
+    for (const button of buttons) button.addEventListener('click', () => setPage(button.dataset.page));
+    close.addEventListener('click', () => setOpen(false));
+    window.addEventListener('koi:open-settings', onOpenRequest);
+    setPage(activePage);
+
+    return {
+        restoreSaved: fish.restoreSaved,
+        open: pageId => setOpen(true, pageId || activePage),
+        dispose() {
+            window.removeEventListener('koi:open-settings', onOpenRequest);
+            fish.dispose();
+            ripple.dispose();
+            clock.dispose();
+            shell.remove();
+        }
+    };
+}
+
+Object.assign(exports, { createSettingsPanel });
+};
 __modules["src/ui/fish-debug-panel.js"] = function (exports, __require) {
+const { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } = __require("src/ui/icons.js");
 const SHAPE_DEFAULTS = Object.freeze({
     bodyLen: 1,
     bodyH: 1,
@@ -5202,50 +5948,52 @@ function addStyles() {
     style.id = 'fish-debug-panel-styles';
     style.textContent = [
         '.fish-debug{position:fixed;top:16px;right:16px;z-index:20;color:#eef8f4;font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif}',
+        '.fish-debug:not(.fish-debug--embedded){top:50%;left:50%;right:auto;transform:translate(-50%,-50%)}',
         '.fish-debug *{box-sizing:border-box}',
         '.fish-debug button,.fish-debug input,.fish-debug select,.fish-debug textarea{font:inherit}',
         '.fish-debug__toggle{min-width:92px;height:40px;padding:0 16px;border:1px solid rgba(208,235,225,.32);border-radius:12px;background:rgba(6,22,21,.92);color:#f4fbf8;box-shadow:0 10px 30px rgba(0,0,0,.28);cursor:pointer}',
         '.fish-debug__panel{width:320px;max-height:calc(100dvh - 32px);overflow:auto;padding:18px;border:1px solid rgba(208,235,225,.24);border-radius:14px;background:rgba(6,22,21,.94);box-shadow:0 18px 50px rgba(0,0,0,.38);backdrop-filter:blur(14px) saturate(115%)}',
-        '.fish-debug__panel[hidden],.fish-debug__toggle[hidden]{display:none}',
+        '.fish-debug__panel[hidden],.fish-debug__toggle[hidden],.fish-debug__section[hidden],.fish-debug__field[hidden]{display:none}',
         '.fish-debug__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}',
         '.fish-debug__title{margin:0;font-size:18px;line-height:1.25;font-weight:750;letter-spacing:-.02em}',
         '.fish-debug__hint{margin:4px 0 0;color:#a8c6bb;font-size:12px}',
-        '.fish-debug__close{height:34px;padding:0 10px;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
+        '.fish-debug__close{width:34px;height:34px;padding:0;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
         '.fish-debug__section{margin:0;padding:15px 0;border:0;border-top:1px solid rgba(208,235,225,.14)}',
         '.fish-debug__legend{padding:0 0 10px;font-size:13px;font-weight:700;color:#cfe6de}',
         '.fish-debug__field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px 12px;margin-bottom:13px}',
         '.fish-debug__field:last-child{margin-bottom:0}',
         '.fish-debug__field label{color:#dcece6}',
-        '.fish-debug__value{min-width:42px;text-align:right;color:#91d7c0;font-variant-numeric:tabular-nums}',
-        '.fish-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
+        '.fish-debug__value{min-width:42px;text-align:right;color:var(--pond-ui-primary);font-variant-numeric:tabular-nums}',
+        '.fish-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:var(--pond-ui-primary)}',
         '.fish-debug__field input[type="color"]{width:48px;height:30px;padding:2px;border:1px solid rgba(208,235,225,.25);border-radius:7px;background:#102b28;cursor:pointer}',
         '.fish-debug__select{width:100%;height:38px;padding:0 10px;border:1px solid rgba(208,235,225,.24);border-radius:8px;background:#102b28;color:#eef8f4}',
         '.fish-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.fish-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
-        '.fish-debug__button--primary{border-color:#72cbae;background:#72cbae;color:#08211d;font-weight:750}',
+        '.fish-debug__button--primary{border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);color:var(--pond-ui-primary-ink);font-weight:750}',
         '.fish-debug__output{width:100%;height:112px;margin-top:12px;padding:10px;resize:vertical;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#081b1a;color:#bfe1d6;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}',
         '.fish-debug__status{min-height:20px;margin:10px 0 0;color:#9ccabd;font-size:12px}',
         '.fish-debug__metrics{display:grid;grid-template-columns:1fr auto;gap:7px 14px;margin-top:12px;padding:11px;border-radius:9px;background:#081b1a;color:#b8d7cd}',
-        '.fish-debug__metric-value{color:#8fe0c3;text-align:right;font-variant-numeric:tabular-nums}',
+        '.fish-debug__metric-value{color:var(--pond-ui-primary);text-align:right;font-variant-numeric:tabular-nums}',
         '.fish-debug__readonly{margin:9px 0 0;color:#8eb5a8;font-size:12px}',
         '.fish-debug button:hover{filter:brightness(1.08)}',
-        '.fish-debug button:focus-visible,.fish-debug input:focus-visible,.fish-debug select:focus-visible,.fish-debug textarea:focus-visible{outline:3px solid rgba(138,225,196,.7);outline-offset:2px}',
-        '@media(max-width:600px){.fish-debug{top:10px;right:10px}.fish-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
+        '.fish-debug button:focus-visible,.fish-debug input:focus-visible,.fish-debug select:focus-visible,.fish-debug textarea:focus-visible{outline:3px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@media(max-width:600px){.fish-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
         '@media(prefers-reduced-transparency:reduce){.fish-debug__panel,.fish-debug__toggle{background:#061615;backdrop-filter:none}}'
     ].join('\n');
     document.head.appendChild(style);
 }
 
-function rangeField(key, min, max, step, value) {
+function rangeField(key, min, max, step, value, hidden = false) {
     return [
-        '<div class="fish-debug__field">',
+        '<div class="fish-debug__field"' + (hidden ? ' hidden' : '') + '>',
         '<label for="fish-debug-' + key + '">' + RANGE_LABELS[key] + '</label>',
         '<output class="fish-debug__value" data-output="' + key + '">' + Number(value).toFixed(2) + '</output>',
         '<input id="fish-debug-' + key + '" data-key="' + key + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + value + '">',
         '</div>'
     ].join('');
 }
-function createFishDebugPanel({ kois, config, types, repository }) {
+function createFishDebugPanel({ kois, config, types, repository, embedded = false }) {
+    ensureIconStyles();
     addStyles();
 
     const fishType = types.get('koi');
@@ -5259,18 +6007,20 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     };
     const shell = document.createElement('aside');
     shell.className = 'fish-debug';
+    if (embedded) shell.classList.add('fish-debug--embedded');
     shell.setAttribute('aria-label', '鱼外观调试工具');
+    // 隐藏控件仍保留 data-key、序列化字段和外部接口，兼容已有参数与调用方。
     shell.innerHTML = [
-        '<button class="fish-debug__toggle" type="button" aria-expanded="true" hidden>鱼外观</button>',
+        '<button class="fish-debug__toggle pond-icon-button" type="button" aria-expanded="true" hidden>' + iconLabel('fish', '鱼外观') + '</button>',
         '<section class="fish-debug__panel">',
         '<header class="fish-debug__head">',
-        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">10 种中国常见淡水鱼 · 按 D 显示或隐藏</p></div>',
-        '<button class="fish-debug__close" type="button">收起</button>',
+        '<div><h2 class="fish-debug__title">鱼外观调试</h2><p class="fish-debug__hint">运动与质感参数</p></div>',
+        '<button class="fish-debug__close pond-icon-only" type="button" aria-label="收起鱼外观面板" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button>',
         '</header>',
-        '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">品种</legend>',
+        '<fieldset class="fish-debug__section" hidden><legend class="fish-debug__legend">品种</legend>',
         '<select class="fish-debug__select" data-breed aria-label="选择淡水鱼种"><option value="mixed">10 种混合</option></select>',
         '</fieldset>',
-        '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">尺寸与轮廓</legend>',
+        '<fieldset class="fish-debug__section" hidden><legend class="fish-debug__legend">尺寸与轮廓</legend>',
         rangeField('fishSize', 0.5, 3, 0.05, originalFishSize),
         rangeField('bodyLen', 0.35, 2.2, 0.05, 1),
         rangeField('bodyH', 0.35, 2.2, 0.05, 1),
@@ -5293,16 +6043,16 @@ function createFishDebugPanel({ kois, config, types, repository }) {
         '</div><p class="fish-debug__readonly">上方滑块修改运动模型，下方数据实时监测鱼群状态。</p>',
         '</fieldset>',
         '<fieldset class="fish-debug__section"><legend class="fish-debug__legend">颜色与质感</legend>',
-        '<div class="fish-debug__field"><label for="fish-debug-bodyColor">身体底色</label><input id="fish-debug-bodyColor" data-key="bodyColor" type="color" value="#eee8dc"></div>',
-        '<div class="fish-debug__field"><label for="fish-debug-spotColor">斑纹颜色</label><input id="fish-debug-spotColor" data-key="spotColor" type="color" value="#d94f28"></div>',
-        rangeField('spotWidth', 0.1, 0.72, 0.01, 0.5),
+        '<div class="fish-debug__field" hidden><label for="fish-debug-bodyColor">身体底色</label><input id="fish-debug-bodyColor" data-key="bodyColor" type="color" value="#eee8dc"></div>',
+        '<div class="fish-debug__field" hidden><label for="fish-debug-spotColor">斑纹颜色</label><input id="fish-debug-spotColor" data-key="spotColor" type="color" value="#d94f28"></div>',
+        rangeField('spotWidth', 0.1, 0.72, 0.01, 0.5, true),
         rangeField('outlineWidth', 0, 1, 0.01, 0.22),
-        rangeField('net', 0, 1, 0.01, 0),
+        rangeField('net', 0, 1, 0.01, 0, true),
         rangeField('sheen', 0, 1, 0.01, 0),
         '</fieldset>',
         '<div class="fish-debug__actions">',
-        '<button class="fish-debug__button" type="button" data-reset>恢复全部默认</button>',
-        '<button class="fish-debug__button fish-debug__button--primary" type="button" data-copy>复制参数</button>',
+        '<button class="fish-debug__button pond-icon-button" type="button" data-reset>' + iconLabel('rotate-ccw', '恢复全部默认') + '</button>',
+        '<button class="fish-debug__button fish-debug__button--primary pond-icon-button" type="button" data-copy>' + iconLabel('copy', '复制参数') + '</button>',
         '</div>',
         '<textarea class="fish-debug__output" readonly aria-label="当前调试参数"></textarea>',
         '<p class="fish-debug__status" role="status" aria-live="polite"></p>',
@@ -5325,8 +6075,9 @@ function createFishDebugPanel({ kois, config, types, repository }) {
         breed.appendChild(option);
     }
 
-    function ordinaryFish() {
-        return kois.filter(fish => !fish.custom);
+    function targetFish() {
+        // 默认鱼数为 0 时，可见鱼来自“我的鱼”自定义鱼；调试参数应覆盖当前鱼群。
+        return kois.filter(Boolean);
     }
 
     function inputFor(key) {
@@ -5398,7 +6149,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     function applyInput(input, persist = true) {
         const key = input.dataset.key;
         const value = input.type === 'color' ? input.value : Number(input.value);
-        const fish = ordinaryFish();
+        const fish = targetFish();
 
         if (key === 'fishSize') {
             config.fishSize = value;
@@ -5421,11 +6172,11 @@ function createFishDebugPanel({ kois, config, types, repository }) {
         updateRangeLabel(input);
         refreshOutput();
         if (persist) save();
-        status.textContent = '已应用到 ' + fish.length + ' 条普通鱼';
+        status.textContent = '已应用到 ' + fish.length + ' 条鱼';
     }
 
     function syncFromFirstFish() {
-        const first = ordinaryFish()[0];
+        const first = targetFish()[0];
         if (!first) return;
         const firstShape = { ...SHAPE_DEFAULTS, ...(first.shape || {}) };
         for (const key of Object.keys(SHAPE_DEFAULTS)) inputFor(key).value = firstShape[key];
@@ -5443,7 +6194,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     }
 
     function changeBreed(persist = true) {
-        const fish = ordinaryFish();
+        const fish = targetFish();
         const selected = fishType.breeds.find(item => item.id === breed.value);
         for (const koi of fish) {
             if (selected) koi.applyBreed(selected);
@@ -5485,7 +6236,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
         inputFor('outlineWidth').value = 0.22;
         breed.value = 'mixed';
         for (const key of Object.keys(SHAPE_DEFAULTS)) inputFor(key).value = SHAPE_DEFAULTS[key];
-        for (const koi of ordinaryFish()) {
+        for (const koi of targetFish()) {
             delete koi.outlineWidth;
             koi.shape = koi.type.shape ? { ...koi.type.shape } : null;
             koi.pickBreed();
@@ -5504,7 +6255,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     };
 
     function refreshMotionStatus() {
-        const fish = ordinaryFish();
+        const fish = targetFish();
         if (!fish.length) return;
         let speedSum = 0;
         let turnSum = 0;
@@ -5537,7 +6288,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
         toggle.setAttribute('aria-expanded', String(open));
         if (open) close.focus();
@@ -5553,19 +6304,14 @@ function createFishDebugPanel({ kois, config, types, repository }) {
         status.textContent = copied ? '参数已复制到剪贴板' : '参数已选中，请按 Ctrl+C 复制';
     }
 
-    function onKeyDown(event) {
-        const tag = event.target && event.target.tagName;
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-        if (event.key.toLowerCase() === 'd') setOpen(panel.hidden);
-    }
-
     for (const input of inputs) input.addEventListener('input', () => applyInput(input));
     breed.addEventListener('change', changeBreed);
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
-    close.addEventListener('click', () => setOpen(false));
-    toggle.addEventListener('click', () => setOpen(true));
-    window.addEventListener('keydown', onKeyDown);
+    if (!embedded) {
+        close.addEventListener('click', () => setOpen(false));
+        toggle.addEventListener('click', () => setOpen(true));
+    }
     const motionTimer = setInterval(refreshMotionStatus, 250);
 
     syncFromFirstFish();
@@ -5573,10 +6319,10 @@ function createFishDebugPanel({ kois, config, types, repository }) {
     status.textContent = '面板已就绪';
 
     return {
+        element: shell,
         restoreSaved,
         dispose() {
             clearInterval(motionTimer);
-            window.removeEventListener('keydown', onKeyDown);
             shell.remove();
         }
     };
@@ -5585,7 +6331,7 @@ function createFishDebugPanel({ kois, config, types, repository }) {
 Object.assign(exports, { createFishDebugPanel });
 };
 __modules["src/ui/ripple-debug-panel.js"] = function (exports, __require) {
-const { THEME } = __require("src/shared/legacy-assets.js");
+const { THEME } = __require("src/shared/legacy-assets.js");const { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } = __require("src/ui/icons.js");
 const STORE_KEY = 'koi.debug.ripple.v1';
 
 function addStyles() {
@@ -5594,6 +6340,7 @@ function addStyles() {
     style.id = 'ripple-debug-panel-styles';
     style.textContent = [
         '.ripple-debug{position:fixed;top:16px;left:16px;z-index:21;color:#eef8f4;font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif}',
+        '.ripple-debug:not(.ripple-debug--embedded){top:50%;left:50%;transform:translate(-50%,-50%)}',
         '.ripple-debug *{box-sizing:border-box}',
         '.ripple-debug button,.ripple-debug input,.ripple-debug textarea{font:inherit}',
         '.ripple-debug__toggle{min-width:92px;height:40px;padding:0 16px;border:1px solid rgba(208,235,225,.32);border-radius:12px;background:rgba(6,22,21,.94);color:#f4fbf8;box-shadow:0 10px 30px rgba(0,0,0,.28);cursor:pointer}',
@@ -5602,22 +6349,22 @@ function addStyles() {
         '.ripple-debug__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}',
         '.ripple-debug__title{margin:0;font-size:18px;line-height:1.25;font-weight:750;letter-spacing:-.02em}',
         '.ripple-debug__hint{margin:4px 0 0;color:#a8c6bb;font-size:12px}',
-        '.ripple-debug__close{height:34px;padding:0 10px;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
+        '.ripple-debug__close{width:34px;height:34px;padding:0;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
         '.ripple-debug__section{margin:0;padding:15px 0;border:0;border-top:1px solid rgba(208,235,225,.14)}',
         '.ripple-debug__legend{padding:0 0 10px;font-size:13px;font-weight:700;color:#cfe6de}',
         '.ripple-debug__field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px 12px;margin-bottom:13px}',
         '.ripple-debug__field:last-child{margin-bottom:0}',
         '.ripple-debug__field label{color:#dcece6}',
-        '.ripple-debug__value{min-width:52px;text-align:right;color:#91d7c0;font-variant-numeric:tabular-nums}',
-        '.ripple-debug__field input{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
+        '.ripple-debug__value{min-width:52px;text-align:right;color:var(--pond-ui-primary);font-variant-numeric:tabular-nums}',
+        '.ripple-debug__field input{grid-column:1/-1;width:100%;margin:0;accent-color:var(--pond-ui-primary)}',
         '.ripple-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.ripple-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
-        '.ripple-debug__button--primary{grid-column:1/-1;border-color:#72cbae;background:#72cbae;color:#08211d;font-weight:750}',
+        '.ripple-debug__button--primary{grid-column:1/-1;border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);color:var(--pond-ui-primary-ink);font-weight:750}',
         '.ripple-debug__output{width:100%;height:112px;margin-top:12px;padding:10px;resize:vertical;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#081b1a;color:#bfe1d6;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;caret-color:#8fe0c3}',
         '.ripple-debug__status{min-height:20px;margin:10px 0 0;color:#9ccabd;font-size:12px}',
         '.ripple-debug button:hover{filter:brightness(1.08)}',
-        '.ripple-debug button:focus-visible,.ripple-debug input:focus-visible,.ripple-debug textarea:focus-visible{outline:3px solid rgba(138,225,196,.7);outline-offset:2px}',
-        '@media(max-width:700px){.ripple-debug{top:10px;left:10px}.ripple-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
+        '.ripple-debug button:focus-visible,.ripple-debug input:focus-visible,.ripple-debug textarea:focus-visible{outline:3px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@media(max-width:700px){.ripple-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
         '@media(prefers-reduced-transparency:reduce){.ripple-debug__panel,.ripple-debug__toggle{background:#061615;backdrop-filter:none}}'
     ].join('\n');
     document.head.appendChild(style);
@@ -5632,7 +6379,8 @@ function rangeField(key, label, min, max, step, value) {
         '</div>'
     ].join('');
 }
-function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
+function createRippleDebugPanel({ config, viewport, spawnRipple, repository, embedded = false }) {
+    ensureIconStyles();
     addStyles();
     const T = THEME.water.ripple;
     const clamp = value => Math.max(0, Math.min(1, value));
@@ -5697,11 +6445,12 @@ function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
 
     const shell = document.createElement('aside');
     shell.className = 'ripple-debug';
+    if (embedded) shell.classList.add('ripple-debug--embedded');
     shell.setAttribute('aria-label', '波纹调试工具');
     shell.innerHTML = [
-        '<button class="ripple-debug__toggle" type="button" aria-expanded="true" hidden>波纹调试</button>',
+        '<button class="ripple-debug__toggle pond-icon-button" type="button" aria-expanded="true" hidden>' + iconLabel('waves', '波纹调试') + '</button>',
         '<section class="ripple-debug__panel">',
-        '<header class="ripple-debug__head"><div><h2 class="ripple-debug__title">波纹调试</h2><p class="ripple-debug__hint">8 个常用参数 · 按 R 显示或隐藏</p></div><button class="ripple-debug__close" type="button">收起</button></header>',
+        '<header class="ripple-debug__head"><div><h2 class="ripple-debug__title">波纹调试</h2><p class="ripple-debug__hint">8 个常用参数</p></div><button class="ripple-debug__close pond-icon-only" type="button" aria-label="收起波纹面板" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">形状</legend>',
         group(['rippleStrength', 'lamRatio', 'waveCycles', 'waveDecay']), '</fieldset>',
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">外观</legend>',
@@ -5709,9 +6458,9 @@ function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">运动</legend>',
         group(['speedScale', 'sizeScale']), '</fieldset>',
         '<div class="ripple-debug__actions">',
-        '<button class="ripple-debug__button ripple-debug__button--primary" type="button" data-test>中心测试波纹</button>',
-        '<button class="ripple-debug__button" type="button" data-reset>恢复默认</button>',
-        '<button class="ripple-debug__button" type="button" data-copy>复制参数</button>',
+        '<button class="ripple-debug__button ripple-debug__button--primary pond-icon-button" type="button" data-test>' + iconLabel('circle-dot', '中心测试波纹') + '</button>',
+        '<button class="ripple-debug__button pond-icon-button" type="button" data-reset>' + iconLabel('rotate-ccw', '恢复默认') + '</button>',
+        '<button class="ripple-debug__button pond-icon-button" type="button" data-copy>' + iconLabel('copy', '复制参数') + '</button>',
         '</div>',
         '<textarea class="ripple-debug__output" readonly aria-label="当前波纹参数"></textarea>',
         '<p class="ripple-debug__status" role="status" aria-live="polite"></p>',
@@ -5781,17 +6530,11 @@ function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
         toggle.setAttribute('aria-expanded', String(open));
         if (open) close.focus();
         else toggle.focus();
-    }
-
-    function onKeyDown(event) {
-        const tag = event.target && event.target.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        if (event.key.toLowerCase() === 'r') setOpen(panel.hidden);
     }
 
     for (const input of inputs) input.addEventListener('input', () => {
@@ -5804,15 +6547,16 @@ function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
     shell.querySelector('[data-test]').addEventListener('click', testRipple);
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
-    close.addEventListener('click', () => setOpen(false));
-    toggle.addEventListener('click', () => setOpen(true));
-    window.addEventListener('keydown', onKeyDown);
+    if (!embedded) {
+        close.addEventListener('click', () => setOpen(false));
+        toggle.addEventListener('click', () => setOpen(true));
+    }
     refresh();
     status.textContent = saved ? '已恢复上次保存的波纹参数' : '面板已就绪';
 
     return {
+        element: shell,
         dispose() {
-            window.removeEventListener('keydown', onKeyDown);
             shell.remove();
         }
     };
@@ -5821,7 +6565,7 @@ function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
 Object.assign(exports, { createRippleDebugPanel });
 };
 __modules["src/ui/clock-debug-panel.js"] = function (exports, __require) {
-const { THEME } = __require("src/shared/legacy-assets.js");
+const { THEME } = __require("src/shared/legacy-assets.js");const { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } = __require("src/ui/icons.js");
 const STORE_KEY = 'koi.debug.clock.v1';
 
 function addStyles() {
@@ -5830,6 +6574,7 @@ function addStyles() {
     style.id = 'clock-debug-panel-styles';
     style.textContent = [
         '.clock-debug{position:fixed;top:16px;left:352px;z-index:22;color:#eef8f4;font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif}',
+        '.clock-debug:not(.clock-debug--embedded){top:50%;left:50%;transform:translate(-50%,-50%)}',
         '.clock-debug *{box-sizing:border-box}',
         '.clock-debug button,.clock-debug input,.clock-debug select,.clock-debug textarea{font:inherit}',
         '.clock-debug__toggle{min-width:92px;height:40px;padding:0 16px;border:1px solid rgba(208,235,225,.32);border-radius:12px;background:rgba(6,22,21,.94);color:#f4fbf8;box-shadow:0 10px 30px rgba(0,0,0,.28);cursor:pointer}',
@@ -5838,31 +6583,38 @@ function addStyles() {
         '.clock-debug__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}',
         '.clock-debug__title{margin:0;font-size:18px;line-height:1.25;font-weight:750;letter-spacing:-.02em}',
         '.clock-debug__hint{margin:4px 0 0;color:#a8c6bb;font-size:12px}',
-        '.clock-debug__close{height:34px;padding:0 10px;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
+        '.clock-debug__close{width:34px;height:34px;padding:0;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
         '.clock-debug__section{margin:0;padding:15px 0;border:0;border-top:1px solid rgba(208,235,225,.14)}',
         '.clock-debug__legend{padding:0 0 10px;font-size:13px;font-weight:700;color:#cfe6de}',
         '.clock-debug__field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px 12px;margin-bottom:13px}',
         '.clock-debug__field:last-child{margin-bottom:0}',
         '.clock-debug__field label{color:#dcece6}',
-        '.clock-debug__value{min-width:52px;text-align:right;color:#91d7c0;font-variant-numeric:tabular-nums}',
-        '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
+        '.clock-debug__value{min-width:52px;text-align:right;color:var(--pond-ui-primary);font-variant-numeric:tabular-nums}',
+        '.clock-debug__field input[type="range"]{grid-column:1/-1;width:100%;margin:0;accent-color:var(--pond-ui-primary)}',
         '.clock-debug__field input[type="color"]{width:48px;height:30px;padding:2px;border:1px solid rgba(208,235,225,.25);border-radius:7px;background:#102b28;cursor:pointer}',
-        '.clock-debug__field input[type="checkbox"]{width:18px;height:18px;accent-color:#76cdb0}',
+        '.clock-debug__field input[type="checkbox"]{appearance:none;-webkit-appearance:none;position:relative;width:42px;height:24px;margin:0;border:1px solid rgba(208,235,225,.28);border-radius:999px;background:rgba(218,244,236,.12);box-shadow:inset 0 1px 3px rgba(0,20,18,.24);cursor:pointer;transition:background-color 160ms ease-out,border-color 160ms ease-out,box-shadow 160ms ease-out}',
+        '.clock-debug__field input[type="checkbox"]::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:rgba(238,250,246,.82);box-shadow:0 2px 5px rgba(0,20,18,.34);transition:transform 180ms cubic-bezier(.2,.8,.2,1),background-color 160ms ease-out}',
+        '.clock-debug__field input[type="checkbox"]:hover{border-color:var(--pond-ui-primary-border);background:var(--pond-ui-primary-soft)}',
+        '.clock-debug__field input[type="checkbox"]:checked{border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);box-shadow:inset 0 1px 3px rgba(0,45,39,.22)}',
+        '.clock-debug__field input[type="checkbox"]:checked::after{transform:translateX(18px);background:var(--pond-ui-primary-ink)}',
+        '.clock-debug__field input[type="checkbox"]:disabled{opacity:.45;cursor:not-allowed}',
         '.clock-debug__palettes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 14px}',
-        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
+        '.clock-debug__palette{display:grid;grid-template-columns:28px 1fr 16px;align-items:center;gap:8px;min-height:42px;padding:6px 8px;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#102b28;color:#dcece6;text-align:left;cursor:pointer}',
         '.clock-debug__palette[aria-pressed="true"]{border-color:#8bdbc0;box-shadow:0 0 0 2px rgba(139,219,192,.20)}',
         '.clock-debug__palette-swatch{position:relative;width:28px;height:28px;border:1px solid rgba(255,255,255,.42);border-radius:7px;background:var(--palette-bg);box-shadow:inset 0 1px rgba(255,255,255,.35)}',
         '.clock-debug__palette-swatch::after{content:"Aa";position:absolute;inset:0;display:grid;place-items:center;color:var(--palette-fg);font:700 10px/1 system-ui,sans-serif}',
         '.clock-debug__palette-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
+        '.clock-debug__palette-mark{opacity:0;color:var(--pond-ui-primary)}.clock-debug__palette[aria-pressed="true"] .clock-debug__palette-mark{opacity:1}',
         '.clock-debug__select{grid-column:1/-1;width:100%;height:38px;padding:0 10px;border:1px solid rgba(208,235,225,.24);border-radius:8px;background:#102b28;color:#eef8f4}',
         '.clock-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.clock-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
-        '.clock-debug__button--primary{border-color:#72cbae;background:#72cbae;color:#08211d;font-weight:750}',
+        '.clock-debug__button--primary{border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);color:var(--pond-ui-primary-ink);font-weight:750}',
         '.clock-debug__output{width:100%;height:108px;margin-top:12px;padding:10px;resize:vertical;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#081b1a;color:#bfe1d6;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;caret-color:#8fe0c3}',
         '.clock-debug__status{min-height:20px;margin:10px 0 0;color:#9ccabd;font-size:12px}',
         '.clock-debug button:hover{filter:brightness(1.08)}',
-        '.clock-debug button:focus-visible,.clock-debug input:focus-visible,.clock-debug select:focus-visible,.clock-debug textarea:focus-visible{outline:3px solid rgba(138,225,196,.7);outline-offset:2px}',
-        '@media(max-width:900px){.clock-debug{top:60px;left:10px}.clock-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 70px)}}',
+        '.clock-debug button:focus-visible,.clock-debug input:focus-visible,.clock-debug select:focus-visible,.clock-debug textarea:focus-visible{outline:3px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@media(max-width:900px){.clock-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
+        '@media(prefers-reduced-motion:reduce){.clock-debug__field input[type="checkbox"],.clock-debug__field input[type="checkbox"]::after{transition:none}}',
         '@media(prefers-reduced-transparency:reduce){.clock-debug__panel,.clock-debug__toggle{background:#061615;backdrop-filter:none}}'
     ].join('\n');
     document.head.appendChild(style);
@@ -5889,7 +6641,8 @@ function rgba(hex, alpha) {
     const n = parseInt(hex.slice(1), 16);
     return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha.toFixed(3) + ')';
 }
-function createClockDebugPanel({ repository }) {
+function createClockDebugPanel({ repository, embedded = false }) {
+    ensureIconStyles();
     addStyles();
     const T = THEME.clock;
     const parsed = parseColor(T.color);
@@ -5915,7 +6668,7 @@ function createClockDebugPanel({ repository }) {
     ];
     const paletteMarkup = palettes.map(palette =>
         '<button class="clock-debug__palette" type="button" data-palette="' + palette.id + '" aria-pressed="false" style="--palette-bg:' + palette.bg + ';--palette-fg:' + palette.text + '">' +
-        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span></button>'
+        '<span class="clock-debug__palette-swatch" aria-hidden="true"></span><span class="clock-debug__palette-name">' + palette.name + '</span><span class="clock-debug__palette-mark" aria-hidden="true">' + icon('check') + '</span></button>'
     ).join('');
     let fontId = Object.keys(fonts).find(key => fonts[key] === T.font) || 'yahei';
     const fields = {
@@ -5972,11 +6725,12 @@ function createClockDebugPanel({ repository }) {
 
     const shell = document.createElement('aside');
     shell.className = 'clock-debug';
+    if (embedded) shell.classList.add('clock-debug--embedded');
     shell.setAttribute('aria-label', '时间显示样式调试工具');
     shell.innerHTML = [
-        '<button class="clock-debug__toggle" type="button" aria-expanded="true" hidden>时间样式</button>',
+        '<button class="clock-debug__toggle pond-icon-button" type="button" aria-expanded="true" hidden>' + iconLabel('clock', '时间样式') + '</button>',
         '<section class="clock-debug__panel">',
-        '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟 · 按 T 显示或隐藏</p></div><button class="clock-debug__close" type="button">收起</button></header>',
+        '<header class="clock-debug__head"><div><h2 class="clock-debug__title">时间显示样式</h2><p class="clock-debug__hint">实时修改画面时钟</p></div><button class="clock-debug__close pond-icon-only" type="button" aria-label="收起时间样式面板" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">显示与位置</legend>',
         '<div class="clock-debug__field"><label for="clock-debug-show">显示时间</label><input id="clock-debug-show" data-show type="checkbox"></div>',
         '<div class="clock-debug__field"><label for="clock-debug-foreground">时间置于鱼上方</label><input id="clock-debug-foreground" data-foreground type="checkbox"></div>',
@@ -5998,7 +6752,7 @@ function createClockDebugPanel({ repository }) {
         group(['cardTextOpacity', 'cardOpacity', 'cardBlur', 'cardRadius', 'cardShadow']), '</fieldset>',
         '<fieldset class="clock-debug__section"><legend class="clock-debug__legend">阴影</legend>',
         group(['shadowAlpha', 'shadowBlur', 'shadowOffset']), '</fieldset>',
-        '<div class="clock-debug__actions"><button class="clock-debug__button" type="button" data-reset>恢复默认</button><button class="clock-debug__button clock-debug__button--primary" type="button" data-copy>复制参数</button></div>',
+        '<div class="clock-debug__actions"><button class="clock-debug__button pond-icon-button" type="button" data-reset>' + iconLabel('rotate-ccw', '恢复默认') + '</button><button class="clock-debug__button clock-debug__button--primary pond-icon-button" type="button" data-copy>' + iconLabel('copy', '复制参数') + '</button></div>',
         '<textarea class="clock-debug__output" readonly aria-label="当前时间样式参数"></textarea>',
         '<p class="clock-debug__status" role="status" aria-live="polite"></p>',
         '</section>'
@@ -6106,16 +6860,10 @@ function createClockDebugPanel({ repository }) {
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
         toggle.setAttribute('aria-expanded', String(open));
         if (open) close.focus(); else toggle.focus();
-    }
-
-    function onKeyDown(event) {
-        const tag = event.target && event.target.tagName;
-        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-        if (event.key.toLowerCase() === 't') setOpen(panel.hidden);
     }
 
     for (const input of inputs) input.addEventListener('input', () => {
@@ -6171,13 +6919,14 @@ function createClockDebugPanel({ repository }) {
     });
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
-    close.addEventListener('click', () => setOpen(false));
-    toggle.addEventListener('click', () => setOpen(true));
-    window.addEventListener('keydown', onKeyDown);
+    if (!embedded) {
+        close.addEventListener('click', () => setOpen(false));
+        toggle.addEventListener('click', () => setOpen(true));
+    }
     refresh();
     status.textContent = saved ? '已恢复上次保存的时间样式' : '面板已就绪';
 
-    return { dispose() { window.removeEventListener('keydown', onKeyDown); shell.remove(); } };
+    return { element: shell, dispose() { shell.remove(); } };
 }
 
 Object.assign(exports, { createClockDebugPanel });

@@ -28,14 +28,14 @@ import { createInputRouter } from './input/input-router.js';
 import { attachBrowserInput } from './input/browser-input.js';
 import { registerBuiltins } from './builtins.js';
 
-export function createPondApp(canvas) {
+export async function createPondApp(canvas) {
     const config = createSettings();
     const types = createFishTypes();
     const viewport = { width: innerWidth, height: innerHeight };
     const time = { elapsed: 0 };
     const kois = [], foods = [];
     const mouse = { x: null, y: null, active: false };
-    const repository = createRepository();
+    const repository = await createRepository();
     const ripples = createRipples({ config, viewport });
     const { spawnRipple } = ripples;
     const schoolSystem = createSchools({ config, viewport });
@@ -62,7 +62,7 @@ export function createPondApp(canvas) {
         onAfterSync: () => features.get('customFish')?.syncCustomFish?.()
     });
     population.syncStock();
-    features.get('fishDebugPanel')?.restoreSaved?.();
+    features.get('settingsPanel')?.restoreSaved?.();
     features.get('customFish')?.loadCustomFishFromStore?.();
 
     const { resolveFishCollisions } = createCollisions({ kois, config });
@@ -105,14 +105,25 @@ export function createPondApp(canvas) {
         })
     };
 }
-export const app = createPondApp(document.getElementById('wallpaper-canvas'));
 const params = new URLSearchParams(location.search);
-if (params.has('debug')) window.__pondDebug = app;
-// 预览/联调用:index.html?weather=rain|clear —— 宿主里没有这个参数,
-// 正式版不出现任何 UI(天气只由宿主属性 config.weather 控制)。它同时是"网页 demo 那一路"的入口。
-// ⚠️ 参数写错(例如老的 ?weather=overcast)只警告,不能让整页挂掉 —— 顶部抛异常 = 白屏。
-if (params.has('weather')) {
-    const v = params.get('weather');
-    try { app.setWeather(v); } catch (e) { console.warn('[koi] 未知的 weather 参数,已忽略:', v); }
-}
-app.start();
+export let app = null;
+export const appReady = createPondApp(document.getElementById('wallpaper-canvas')).then(instance => {
+    app = instance;
+    if (params.has('debug')) window.__pondDebug = instance;
+    // 预览/联调用:index.html?weather=rain|clear —— 宿主里没有这个参数,
+    // 正式版不出现任何 UI(天气只由宿主属性 config.weather 控制)。它同时是"网页 demo 那一路"的入口。
+    // ⚠️ 参数写错(例如老的 ?weather=overcast)只警告,不能让整页挂掉 —— 顶部抛异常 = 白屏。
+    if (params.has('weather')) {
+        const v = params.get('weather');
+        try { instance.setWeather(v); } catch (e) { console.warn('[koi] 未知的 weather 参数,已忽略:', v); }
+    }
+    instance.start();
+    return instance;
+}).catch(error => {
+    console.error('[koi] IndexedDB 初始化失败，鱼池无法启动:', error);
+    const message = document.createElement('p');
+    message.textContent = '本地数据库初始化失败，请检查浏览器是否允许 IndexedDB。';
+    message.style.cssText = 'position:fixed;inset:50% auto auto 50%;transform:translate(-50%,-50%);color:#fff;font:16px system-ui';
+    document.body.appendChild(message);
+    return null;
+});

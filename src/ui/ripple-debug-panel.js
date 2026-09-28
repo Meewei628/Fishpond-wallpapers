@@ -1,5 +1,7 @@
 import { THEME } from '../shared/legacy-assets.js';
 
+import { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } from './icons.js';
+
 const STORE_KEY = 'koi.debug.ripple.v1';
 
 function addStyles() {
@@ -8,6 +10,7 @@ function addStyles() {
     style.id = 'ripple-debug-panel-styles';
     style.textContent = [
         '.ripple-debug{position:fixed;top:16px;left:16px;z-index:21;color:#eef8f4;font:14px/1.45 system-ui,-apple-system,"Microsoft YaHei",sans-serif}',
+        '.ripple-debug:not(.ripple-debug--embedded){top:50%;left:50%;transform:translate(-50%,-50%)}',
         '.ripple-debug *{box-sizing:border-box}',
         '.ripple-debug button,.ripple-debug input,.ripple-debug textarea{font:inherit}',
         '.ripple-debug__toggle{min-width:92px;height:40px;padding:0 16px;border:1px solid rgba(208,235,225,.32);border-radius:12px;background:rgba(6,22,21,.94);color:#f4fbf8;box-shadow:0 10px 30px rgba(0,0,0,.28);cursor:pointer}',
@@ -16,22 +19,22 @@ function addStyles() {
         '.ripple-debug__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}',
         '.ripple-debug__title{margin:0;font-size:18px;line-height:1.25;font-weight:750;letter-spacing:-.02em}',
         '.ripple-debug__hint{margin:4px 0 0;color:#a8c6bb;font-size:12px}',
-        '.ripple-debug__close{height:34px;padding:0 10px;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
+        '.ripple-debug__close{width:34px;height:34px;padding:0;border:1px solid rgba(208,235,225,.22);border-radius:8px;background:#12302d;color:#dcece6;cursor:pointer}',
         '.ripple-debug__section{margin:0;padding:15px 0;border:0;border-top:1px solid rgba(208,235,225,.14)}',
         '.ripple-debug__legend{padding:0 0 10px;font-size:13px;font-weight:700;color:#cfe6de}',
         '.ripple-debug__field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:7px 12px;margin-bottom:13px}',
         '.ripple-debug__field:last-child{margin-bottom:0}',
         '.ripple-debug__field label{color:#dcece6}',
-        '.ripple-debug__value{min-width:52px;text-align:right;color:#91d7c0;font-variant-numeric:tabular-nums}',
-        '.ripple-debug__field input{grid-column:1/-1;width:100%;margin:0;accent-color:#76cdb0}',
+        '.ripple-debug__value{min-width:52px;text-align:right;color:var(--pond-ui-primary);font-variant-numeric:tabular-nums}',
+        '.ripple-debug__field input{grid-column:1/-1;width:100%;margin:0;accent-color:var(--pond-ui-primary)}',
         '.ripple-debug__actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:15px}',
         '.ripple-debug__button{min-height:38px;padding:8px 10px;border:1px solid rgba(208,235,225,.24);border-radius:9px;background:#143632;color:#eef8f4;cursor:pointer}',
-        '.ripple-debug__button--primary{grid-column:1/-1;border-color:#72cbae;background:#72cbae;color:#08211d;font-weight:750}',
+        '.ripple-debug__button--primary{grid-column:1/-1;border-color:var(--pond-ui-primary);background:var(--pond-ui-primary);color:var(--pond-ui-primary-ink);font-weight:750}',
         '.ripple-debug__output{width:100%;height:112px;margin-top:12px;padding:10px;resize:vertical;border:1px solid rgba(208,235,225,.18);border-radius:9px;background:#081b1a;color:#bfe1d6;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;caret-color:#8fe0c3}',
         '.ripple-debug__status{min-height:20px;margin:10px 0 0;color:#9ccabd;font-size:12px}',
         '.ripple-debug button:hover{filter:brightness(1.08)}',
-        '.ripple-debug button:focus-visible,.ripple-debug input:focus-visible,.ripple-debug textarea:focus-visible{outline:3px solid rgba(138,225,196,.7);outline-offset:2px}',
-        '@media(max-width:700px){.ripple-debug{top:10px;left:10px}.ripple-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
+        '.ripple-debug button:focus-visible,.ripple-debug input:focus-visible,.ripple-debug textarea:focus-visible{outline:3px solid var(--pond-ui-focus);outline-offset:2px}',
+        '@media(max-width:700px){.ripple-debug__panel{width:min(320px,calc(100vw - 20px));max-height:calc(100dvh - 20px)}}',
         '@media(prefers-reduced-transparency:reduce){.ripple-debug__panel,.ripple-debug__toggle{background:#061615;backdrop-filter:none}}'
     ].join('\n');
     document.head.appendChild(style);
@@ -47,7 +50,8 @@ function rangeField(key, label, min, max, step, value) {
     ].join('');
 }
 
-export function createRippleDebugPanel({ config, viewport, spawnRipple, repository }) {
+export function createRippleDebugPanel({ config, viewport, spawnRipple, repository, embedded = false }) {
+    ensureIconStyles();
     addStyles();
     const T = THEME.water.ripple;
     const clamp = value => Math.max(0, Math.min(1, value));
@@ -112,11 +116,12 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple, reposito
 
     const shell = document.createElement('aside');
     shell.className = 'ripple-debug';
+    if (embedded) shell.classList.add('ripple-debug--embedded');
     shell.setAttribute('aria-label', '波纹调试工具');
     shell.innerHTML = [
-        '<button class="ripple-debug__toggle" type="button" aria-expanded="true" hidden>波纹调试</button>',
+        '<button class="ripple-debug__toggle pond-icon-button" type="button" aria-expanded="true" hidden>' + iconLabel('waves', '波纹调试') + '</button>',
         '<section class="ripple-debug__panel">',
-        '<header class="ripple-debug__head"><div><h2 class="ripple-debug__title">波纹调试</h2><p class="ripple-debug__hint">8 个常用参数 · 按 R 显示或隐藏</p></div><button class="ripple-debug__close" type="button">收起</button></header>',
+        '<header class="ripple-debug__head"><div><h2 class="ripple-debug__title">波纹调试</h2><p class="ripple-debug__hint">8 个常用参数</p></div><button class="ripple-debug__close pond-icon-only" type="button" aria-label="收起波纹面板" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">形状</legend>',
         group(['rippleStrength', 'lamRatio', 'waveCycles', 'waveDecay']), '</fieldset>',
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">外观</legend>',
@@ -124,9 +129,9 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple, reposito
         '<fieldset class="ripple-debug__section"><legend class="ripple-debug__legend">运动</legend>',
         group(['speedScale', 'sizeScale']), '</fieldset>',
         '<div class="ripple-debug__actions">',
-        '<button class="ripple-debug__button ripple-debug__button--primary" type="button" data-test>中心测试波纹</button>',
-        '<button class="ripple-debug__button" type="button" data-reset>恢复默认</button>',
-        '<button class="ripple-debug__button" type="button" data-copy>复制参数</button>',
+        '<button class="ripple-debug__button ripple-debug__button--primary pond-icon-button" type="button" data-test>' + iconLabel('circle-dot', '中心测试波纹') + '</button>',
+        '<button class="ripple-debug__button pond-icon-button" type="button" data-reset>' + iconLabel('rotate-ccw', '恢复默认') + '</button>',
+        '<button class="ripple-debug__button pond-icon-button" type="button" data-copy>' + iconLabel('copy', '复制参数') + '</button>',
         '</div>',
         '<textarea class="ripple-debug__output" readonly aria-label="当前波纹参数"></textarea>',
         '<p class="ripple-debug__status" role="status" aria-live="polite"></p>',
@@ -196,17 +201,11 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple, reposito
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
         toggle.setAttribute('aria-expanded', String(open));
         if (open) close.focus();
         else toggle.focus();
-    }
-
-    function onKeyDown(event) {
-        const tag = event.target && event.target.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        if (event.key.toLowerCase() === 'r') setOpen(panel.hidden);
     }
 
     for (const input of inputs) input.addEventListener('input', () => {
@@ -219,15 +218,16 @@ export function createRippleDebugPanel({ config, viewport, spawnRipple, reposito
     shell.querySelector('[data-test]').addEventListener('click', testRipple);
     shell.querySelector('[data-reset]').addEventListener('click', reset);
     shell.querySelector('[data-copy]').addEventListener('click', copyParameters);
-    close.addEventListener('click', () => setOpen(false));
-    toggle.addEventListener('click', () => setOpen(true));
-    window.addEventListener('keydown', onKeyDown);
+    if (!embedded) {
+        close.addEventListener('click', () => setOpen(false));
+        toggle.addEventListener('click', () => setOpen(true));
+    }
     refresh();
     status.textContent = saved ? '已恢复上次保存的波纹参数' : '面板已就绪';
 
     return {
+        element: shell,
         dispose() {
-            window.removeEventListener('keydown', onKeyDown);
             shell.remove();
         }
     };

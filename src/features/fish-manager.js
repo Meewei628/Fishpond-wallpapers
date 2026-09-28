@@ -1,5 +1,6 @@
 import { KOI_SHAPE } from '../shared/legacy-assets.js';
 import { noseColorOf } from '../render/fish-skin.js';
+import { ensureIconStyles, icon, iconLabel, setAnimatedVisibility } from '../ui/icons.js';
 
 const STORE_KEY = 'koi.user.fish.v2';
 const MAX_FISH = 24;
@@ -23,17 +24,17 @@ function addStyles() {
     const style = document.createElement('style');
     style.id = 'fish-manager-styles';
     style.textContent = [
-        '.fish-manager{--bg-top:rgba(18,71,67,.30);--bg:rgba(9,47,45,.30);--surface-1:rgba(224,255,246,.07);--surface-2:rgba(230,255,248,.11);--stroke:rgba(202,239,228,.18);--text:#f7fffb;--muted:rgba(226,245,238,.74);--accent:#f5a23e;--accent-ink:#2b2114;--control:#ef9131;--track:rgba(210,237,228,.24);position:fixed;inset:16px;z-index:40;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
+        '.fish-manager{--bg-top:var(--pond-ui-bg-top);--bg:var(--pond-ui-bg);--surface-1:var(--pond-ui-surface-1);--surface-2:var(--pond-ui-surface-2);--stroke:var(--pond-ui-stroke);--text:var(--pond-ui-text);--muted:var(--pond-ui-muted);--accent:var(--pond-ui-accent);--accent-ink:var(--pond-ui-accent-ink);--control:var(--pond-ui-primary);--track:rgba(210,237,228,.24);position:fixed;inset:16px;z-index:40;pointer-events:none;color:var(--text);font:13.5px/1.5 "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.34)}',
         '.fish-manager *{box-sizing:border-box}.fish-manager button,.fish-manager input,.fish-manager select{font:inherit}',
-        '.fish-manager__toggle{pointer-events:auto;position:absolute;right:0;top:0;height:40px;padding:0 15px;border:1px solid var(--stroke);border-radius:10px;background:linear-gradient(180deg,var(--bg-top),var(--bg));box-shadow:0 12px 30px rgba(0,24,22,.28);color:#fff;cursor:pointer}',
-        '.fish-manager__panel{pointer-events:auto;position:absolute;right:0;top:0;width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:18px;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3);scrollbar-color:rgba(242,175,92,.72) rgba(255,255,255,.06)}',
-        '.fish-manager__panel[hidden],.fish-manager__toggle[hidden]{display:none}.fish-manager__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.fish-manager__title{margin:0;font-size:15px;font-weight:700}.fish-manager__hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}',
-        '.fish-manager__close,.fish-manager__button{height:32px;padding:0 14px;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:#fff;cursor:pointer}.fish-manager button:hover{filter:brightness(1.10)}.fish-manager button:focus-visible,.fish-manager input:focus-visible,.fish-manager select:focus-visible{outline:2px solid #ffc66f;outline-offset:2px}.fish-manager__button--primary{height:36px;background:var(--accent);color:var(--accent-ink);font-weight:750;text-shadow:none}.fish-manager__button--danger{background:rgba(194,66,48,.46)}',
+        '.fish-manager__toggle{pointer-events:auto;position:fixed;right:16px;top:16px;display:grid;place-items:center;width:40px;height:40px;padding:0;border:1px solid currentColor;border-radius:11px;background:rgba(6,34,31,.20);box-shadow:0 8px 22px rgba(0,28,25,.16);color:rgba(244,252,248,.88);opacity:.76;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:opacity 160ms ease-out,background-color 160ms ease-out,transform 160ms ease-out}',
+        '.fish-manager__panel{pointer-events:auto;position:absolute;left:50%;top:50%;right:auto;transform:translate(-50%,-50%);width:min(1180px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:18px;border:1px solid rgba(222,255,246,.14);border-radius:16px;background:linear-gradient(150deg,var(--bg-top),var(--bg));box-shadow:0 28px 80px rgba(0,22,20,.46);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px) saturate(1.3);scrollbar-color:var(--pond-ui-primary) rgba(255,255,255,.06)}',
+        '.fish-manager__panel[hidden],.fish-manager__toggle[hidden]{display:none}.fish-manager__header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.fish-manager__title,.fish-manager__section-title--icon{display:flex;align-items:center;gap:7px}.fish-manager__title{margin:0;font-size:15px;font-weight:700}.fish-manager__hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}',
+        '.fish-manager__close,.fish-manager__button{height:32px;padding:0 14px;border:1px solid var(--stroke);border-radius:9px;background:var(--surface-2);color:#fff;cursor:pointer}.fish-manager__close{width:32px;padding:0}.fish-manager button:hover{filter:brightness(1.10)}.fish-manager__toggle:hover{opacity:1;filter:none}.fish-manager button:focus-visible,.fish-manager input:focus-visible,.fish-manager select:focus-visible{outline:2px solid var(--pond-ui-focus);outline-offset:2px}.fish-manager__button--primary{height:36px;background:var(--accent);color:var(--accent-ink);font-weight:750;text-shadow:none}.fish-manager__button--danger{background:rgba(194,66,48,.46)}',
         '.fish-manager__layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,350px);grid-template-rows:auto auto;gap:14px}.fish-manager__card{padding:14px;border:1px solid rgba(222,255,246,.08);border-radius:13px;background:var(--surface-1)}.fish-manager__section-title{margin:0 0 10px;font-size:15px;font-weight:750}',
         '.fish-manager__form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.fish-manager__field{display:grid;gap:5px}.fish-manager__field label{color:var(--muted);font-size:12.5px}.fish-manager__field input,.fish-manager__field select{width:100%;height:30px;padding:0 9px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2);color:#fff}.fish-manager__field select option{color:#182b2c}.fish-manager__field input[type=color]{padding:2px}.fish-manager__field input[type=range]{height:18px;padding:0;border:0;background:transparent;accent-color:var(--control)}.fish-manager__range-value{color:var(--accent);font-variant-numeric:tabular-nums}',
         '.fish-manager__editor-card{grid-column:1;grid-row:1}.fish-manager__list-card{grid-column:2;grid-row:1/span 2}.fish-manager__board-card{grid-column:1;grid-row:2}.fish-manager__board-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.fish-manager__tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.fish-manager__tools input[type=color]{width:42px;height:30px;padding:2px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface-2)}.fish-manager__tools input[type=range]{width:120px;accent-color:var(--control)}',
         '.fish-manager__canvas-wrap{width:100%;min-height:360px;border:1px solid rgba(163,224,207,.18);border-radius:13px;overflow:hidden;background:#073936;box-shadow:inset 0 0 46px rgba(0,15,14,.44);touch-action:none}.fish-manager__canvas{display:block;width:100%;height:auto;min-height:360px;cursor:crosshair}.fish-manager__board-note{margin:8px 0 0;color:var(--muted);font-size:12.5px}.fish-manager__actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}',
-        '.fish-manager__list{display:grid;gap:9px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}.fish-manager__empty{display:grid;place-items:center;min-height:280px;color:var(--muted);text-align:center;white-space:pre-line}.fish-manager__fish{padding:12px;border:1px solid rgba(222,255,246,.08);border-radius:11px;background:rgba(217,255,244,.06)}.fish-manager__fish-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.fish-manager__fish-name{font-weight:700}.fish-manager__fish-kind{color:var(--muted);font-size:12.5px}.fish-manager__favorite{border:0;background:transparent;color:rgba(255,255,255,.55);font-size:20px;cursor:pointer}.fish-manager__favorite[aria-pressed=true]{color:var(--accent)}',
+        '.fish-manager__list{display:grid;gap:9px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}.fish-manager__empty{display:grid;place-items:center;min-height:280px;color:var(--muted);text-align:center;white-space:pre-line}.fish-manager__fish{padding:12px;border:1px solid rgba(222,255,246,.08);border-radius:11px;background:rgba(217,255,244,.06)}.fish-manager__fish-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.fish-manager__fish-name{font-weight:700}.fish-manager__fish-kind{color:var(--muted);font-size:12.5px}.fish-manager__favorite{width:34px;height:34px;border:0;border-radius:9px;background:transparent;color:rgba(255,255,255,.55);cursor:pointer}.fish-manager__favorite:hover{background:var(--surface-2)}.fish-manager__favorite[aria-pressed=true]{color:var(--accent)}.fish-manager__favorite[aria-pressed=true] .pond-icon{fill:currentColor}',
         '.fish-manager__stats{display:grid;gap:7px;margin-top:10px}.fish-manager__stat{display:grid;grid-template-columns:58px 1fr 48px;align-items:center;gap:8px}.fish-manager__track{height:11px;border-radius:999px;background:var(--track);overflow:hidden}.fish-manager__fill{height:100%;border-radius:999px;background:var(--accent)}.fish-manager__value{text-align:right;color:var(--accent);font-variant-numeric:tabular-nums}.fish-manager__fish-actions{display:flex;justify-content:flex-end;margin-top:8px}.fish-manager__status{min-height:20px;margin:8px 0 0;color:var(--muted);font-size:12.5px}',
         '@media(max-width:900px){.fish-manager{inset:8px}.fish-manager__panel{width:calc(100vw - 16px);max-height:calc(100vh - 16px);padding:12px}.fish-manager__layout{grid-template-columns:1fr;grid-template-rows:auto}.fish-manager__editor-card,.fish-manager__list-card,.fish-manager__board-card{grid-column:1;grid-row:auto}.fish-manager__list-card{order:3}.fish-manager__form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.fish-manager__canvas-wrap,.fish-manager__canvas{min-height:260px}.fish-manager__list{max-height:460px}}'
     ].join('\n');
@@ -41,6 +42,7 @@ function addStyles() {
 }
 
 export function createFishManager({ Koi, koiType, kois, config, viewport, spawnRipple, repository }) {
+    ensureIconStyles();
     addStyles();
     const breedById = new Map(koiType.breeds.map(breed => [breed.id, breed]));
     let definitions = [];
@@ -170,9 +172,9 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
     const shell = document.createElement('aside');
     shell.className = 'fish-manager';
     shell.innerHTML = [
-        '<button class="fish-manager__toggle" type="button" hidden>🐟 我的鱼</button>',
-        '<section class="fish-manager__panel" aria-label="鱼设置">',
-        '<header class="fish-manager__header"><div><h1 class="fish-manager__title">🐟 鱼设置</h1><p class="fish-manager__hint">池塘只显示你添加的鱼，外观与状态自动保存到本地数据库</p></div><button class="fish-manager__close" type="button">收起</button></header>',
+        '<button class="fish-manager__toggle pond-icon-only" type="button" aria-label="打开鱼设置" aria-haspopup="dialog" aria-expanded="false" title="鱼设置">' + icon('fish', 'pond-icon pond-icon--20') + '</button>',
+        '<section class="fish-manager__panel" aria-label="鱼设置" hidden>',
+        '<header class="fish-manager__header"><div><h1 class="fish-manager__title">' + icon('fish', 'pond-icon pond-icon--18') + '<span>鱼设置</span></h1><p class="fish-manager__hint">池塘只显示你添加的鱼，外观与状态自动保存到本地数据库</p></div><button class="fish-manager__close pond-icon-only" type="button" aria-label="收起鱼设置" title="收起">' + icon('x', 'pond-icon pond-icon--18') + '</button></header>',
         '<div class="fish-manager__layout">',
         '<section class="fish-manager__card fish-manager__editor-card"><h2 class="fish-manager__section-title">加入一只鱼</h2><div class="fish-manager__form-grid">',
         '<div class="fish-manager__field"><label>名字</label><input data-name maxlength="16" placeholder="给它起个名字"></div>',
@@ -186,10 +188,10 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
         '</div></section>',
         '<section class="fish-manager__card fish-manager__list-card"><h2 class="fish-manager__section-title">我的鱼</h2><div class="fish-manager__list" data-list></div></section>',
         '<section class="fish-manager__card fish-manager__board-card">',
-        '<div class="fish-manager__board-head"><div><h2 class="fish-manager__section-title">🎨 大画板</h2><span class="fish-manager__hint">直接在鱼身上手绘图案</span></div><div class="fish-manager__tools"><label>画笔</label><input data-brush-color type="color" value="#d94f28"><label>粗细</label><input data-brush-size type="range" min="3" max="48" value="18"><button class="fish-manager__button" data-clear type="button">清空图案</button></div></div>',
+        '<div class="fish-manager__board-head"><div><h2 class="fish-manager__section-title fish-manager__section-title--icon">' + icon('palette') + '<span>大画板</span></h2><span class="fish-manager__hint">直接在鱼身上手绘图案</span></div><div class="fish-manager__tools"><label>画笔</label><input data-brush-color type="color" value="#d94f28"><label>粗细</label><input data-brush-size type="range" min="3" max="48" value="18"><button class="fish-manager__button pond-icon-button" data-clear type="button">' + iconLabel('eraser', '清空图案') + '</button></div></div>',
         '<div class="fish-manager__canvas-wrap"><canvas class="fish-manager__canvas" data-board width="720" height="320"></canvas></div>',
         '<p class="fish-manager__board-note">画板会按鱼的身体轮廓裁切；空白区域使用上方选择的身体颜色。</p>',
-        '<div class="fish-manager__actions"><button class="fish-manager__button fish-manager__button--primary" data-add type="button">加入池塘</button></div>',
+        '<div class="fish-manager__actions"><button class="fish-manager__button fish-manager__button--primary pond-icon-button" data-add type="button">' + iconLabel('plus', '加入池塘') + '</button></div>',
         '<p class="fish-manager__status" data-status role="status"></p>',
         '</section></div></section>'
     ].join('');
@@ -197,6 +199,8 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
 
     const panel = shell.querySelector('.fish-manager__panel');
     const toggle = shell.querySelector('.fish-manager__toggle');
+    const settingsButton = document.querySelector('.clock-settings-button');
+    let toggleLayout = '';
     const nameInput = shell.querySelector('[data-name]');
     const breedInput = shell.querySelector('[data-breed]');
     const colorInput = shell.querySelector('[data-color]');
@@ -581,10 +585,10 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
             kind.textContent = (breedById.get(definition.breedId)?.name || '淡水鱼') + ' · ' + definition.name;
             identity.append(fishName, kind);
             const favorite = document.createElement('button');
-            favorite.className = 'fish-manager__favorite';
+            favorite.className = 'fish-manager__favorite pond-icon-only';
             favorite.type = 'button';
-            favorite.textContent = '★';
-            favorite.setAttribute('aria-label', '收藏');
+            favorite.innerHTML = icon('heart', 'pond-icon pond-icon--18');
+            favorite.setAttribute('aria-label', definition.favorite ? '取消收藏' : '收藏');
             favorite.setAttribute('aria-pressed', String(definition.favorite === true));
             favorite.addEventListener('click', () => {
                 definition.favorite = !definition.favorite;
@@ -609,9 +613,9 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
             const actions = document.createElement('div');
             actions.className = 'fish-manager__fish-actions';
             const remove = document.createElement('button');
-            remove.className = 'fish-manager__button fish-manager__button--danger';
+            remove.className = 'fish-manager__button fish-manager__button--danger pond-icon-button';
             remove.type = 'button';
-            remove.textContent = '删除';
+            remove.innerHTML = iconLabel('trash', '删除');
             remove.addEventListener('click', () => {
                 definitions = definitions.filter(item => item.id !== definition.id);
                 storeUserManaged = true;
@@ -662,9 +666,25 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
     }
 
     function setOpen(open) {
-        panel.hidden = !open;
+        setAnimatedVisibility(panel, open);
         toggle.hidden = open;
+        toggle.setAttribute('aria-expanded', String(open));
         if (open) renderBoard();
+    }
+
+    function syncTogglePosition() {
+        if (!settingsButton || settingsButton.hidden) return;
+        const size = Number.parseFloat(settingsButton.style.width) || 40;
+        const left = settingsButton.style.left;
+        const top = Number.parseFloat(settingsButton.style.top) || 0;
+        const layout = left + '|' + top + '|' + size;
+        if (layout === toggleLayout) return;
+        toggleLayout = layout;
+        toggle.style.left = left;
+        toggle.style.right = 'auto';
+        toggle.style.top = (top + size + 8) + 'px';
+        toggle.style.width = size + 'px';
+        toggle.style.height = size + 'px';
     }
 
     breedInput.addEventListener('change', () => applyBreedDefaults(false));
@@ -700,6 +720,7 @@ export function createFishManager({ Koi, koiType, kois, config, viewport, spawnR
         loadCustomFishFromStore() { loadDefinitions(); syncFish(); renderList(); },
         syncCustomFish: syncFish,
         update(dt) {
+            syncTogglePosition();
             statsElapsed += dt;
             saveElapsed += dt;
             if (!panel.hidden) boardWaveTime += dt;

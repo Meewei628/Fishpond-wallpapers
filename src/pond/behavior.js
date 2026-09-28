@@ -6,6 +6,9 @@ const FOOD_DETECT_RADIUS_SQ = 230400;
 const EAT_RADIUS = 20;          // 吃到半径(px)。原来只写了平方值,身体判定要用原值
 const EAT_RADIUS_SQ = 400;
 const FEAR_RADIUS_SQ = 40000;
+const FOLLOW_ARM_RADIUS_SQ = 40000;
+const FOLLOW_RELEASE_RADIUS_SQ = 360000;
+const FOLLOW_ARM_SECONDS = 2;
 function computeFlockInfluence() {
         let sepX = 0, sepY = 0, alignX = 0, alignY = 0;
         let centerX = 0, centerY = 0, neighborCount = 0;
@@ -140,6 +143,18 @@ function update(dt) {
         let behavior = 'cruise';
         let wantHeading = null;   // 本行为想去哪个方向(原地掉头要用)
         const flock = this.computeFlockInfluence();
+        const mouseDistanceSq = mouse.active ? distanceSq(this, mouse) : Infinity;
+        const startled = config.shyFish && mouseDistanceSq < FEAR_RADIUS_SQ
+            && (mouse.startleUntil || 0) > performance.now();
+        if (!mouse.active || mouseDistanceSq > FOLLOW_RELEASE_RADIUS_SQ || startled) {
+            this.mouseHoverTime = 0;
+            this.followsMouse = false;
+        } else if (!this.followsMouse) {
+            this.mouseHoverTime = mouseDistanceSq < FOLLOW_ARM_RADIUS_SQ
+                ? (this.mouseHoverTime || 0) + dt
+                : 0;
+            this.followsMouse = this.mouseHoverTime >= FOLLOW_ARM_SECONDS;
+        }
 
         const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
         const safeMargin = Math.max(50, bodyLength * 1.0);
@@ -160,7 +175,7 @@ function update(dt) {
         let edgeThreat = clamp(threat, 0, 1);
 
         const wantsFood = !!target && minDistSq < FOOD_DETECT_RADIUS_SQ;
-        const foodWins = wantsFood && edgeThreat < 0.5;
+        const foodWins = wantsFood && edgeThreat < 0.5 && !startled;
         if (edgeThreat > 0.04 && !foodWins) {
             behavior = 'edge';
             let inwardHeading = Math.atan2(inwardY, inwardX);
@@ -184,12 +199,19 @@ function update(dt) {
                 this.fedTimer = 51;
             }
 
-        } else if (config.shyFish && mouse.active && distanceSq(this, mouse) < FEAR_RADIUS_SQ) {
+        } else if (startled) {
             behavior = 'flee';
             let fleeHeading = Math.atan2(this.y - mouse.y, this.x - mouse.x);
             wantHeading = fleeHeading;
             desiredTurnRate = clamp(wrapAngle(fleeHeading - this.heading) * 2.7, -1.35, 1.35);
             desiredSpeed = effectiveBaseSpeed * 2.80;   // 受惊逃窜(原 2.15)
+        } else if (this.followsMouse) {
+            behavior = 'follow';
+            const followHeading = Math.atan2(mouse.y - this.y, mouse.x - this.x);
+            const followDistance = Math.sqrt(mouseDistanceSq);
+            wantHeading = followHeading;
+            desiredTurnRate = clamp(wrapAngle(followHeading - this.heading) * 2.2, -1.25, 1.25);
+            desiredSpeed = effectiveBaseSpeed * clamp((followDistance - 25) / 100, 0.35, 1.8);
         } else if (this.schoolId >= 0 && schools[this.schoolId]) {
 
             behavior = 'school';
@@ -252,7 +274,7 @@ function update(dt) {
                 // 群员只吃分离:方向和对齐由编队目标点负责,见 computeFlockInfluence 的注释
                 desiredTurnRate += flock.sepTurn * 0.30;
             } else {
-                const flockWeight = behavior === 'food' ? 0.60 : behavior === 'flee' ? 0.45 : 1.0;
+                const flockWeight = behavior === 'food' ? 0.60 : behavior === 'flee' ? 0.45 : behavior === 'follow' ? 0.55 : 1.0;
                 desiredTurnRate += flock.turn * flockWeight;
             }
         }
@@ -283,10 +305,10 @@ function update(dt) {
 
         let turnRadius = minimumTurnRadius;
         if (pivot) turnRadius = minimumTurnRadius * 0.05;          // 原地掉头:半径压到最小
-        else if (behavior === 'food') turnRadius = minimumTurnRadius * 0.26;
+        else if (behavior === 'food' || behavior === 'follow') turnRadius = minimumTurnRadius * 0.26;
         else if (this.schoolId >= 0) turnRadius = minimumTurnRadius * 0.32;
 
-        const fastAct = (behavior === 'food' || behavior === 'flee');
+        const fastAct = (behavior === 'food' || behavior === 'flee' || behavior === 'follow');
         const maxTurnRate = Math.min(pivot ? 2.6 : (fastAct ? 1.6 : 1.15),
                                      speedPerSecond / turnRadius);
         const turnAcceleration = (pivot ? 7.0 : 2.6) * motionTurnResponse; // 掉头时转向要起得来
@@ -299,7 +321,7 @@ function update(dt) {
         // 掉头时减速要快:时间常数从 ~0.9 秒压到 ~0.29 秒,否则 0.8 秒的窗口里掉不下来
         if (pivot) speedResponse = 3.5;
 
-        if (behavior === 'food' || behavior === 'flee') speedResponse = 4.5;
+        if (behavior === 'food' || behavior === 'flee' || behavior === 'follow') speedResponse = 4.5;
         this.speed += (desiredSpeed - this.speed) * Math.min(1, speedResponse * dt);
         // 上限要容得下新的倍率(2.8),否则躲鼠标的速度会被夹在 2.2 倍,提不起来
         let speedCap = effectiveBaseSpeed * 3.2;

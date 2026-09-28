@@ -4,6 +4,27 @@
   box-sizing: border-box;
 }
 
+:root {
+  --pond-ui-bg-top: rgba(18, 71, 67, 0.30);
+  --pond-ui-bg: rgba(9, 47, 45, 0.30);
+  --pond-ui-surface-1: rgba(224, 255, 246, 0.07);
+  --pond-ui-surface-2: rgba(230, 255, 248, 0.11);
+  --pond-ui-stroke: rgba(202, 239, 228, 0.18);
+  --pond-ui-text: #f7fffb;
+  --pond-ui-muted: rgba(226, 245, 238, 0.74);
+  --pond-ui-primary: #76cdb0;
+  --pond-ui-primary-ink: #08211d;
+  --pond-ui-primary-soft: rgba(118, 205, 176, 0.14);
+  --pond-ui-primary-border: rgba(118, 205, 176, 0.42);
+  --pond-ui-accent: var(--pond-ui-primary);
+  --pond-ui-accent-ink: var(--pond-ui-primary-ink);
+  --pond-ui-focus: #a9ead5;
+  --pond-motion-fast: 150ms;
+  --pond-motion-panel-in: 300ms;
+  --pond-motion-panel-out: 180ms;
+  --pond-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 body {
   overflow: hidden;
   /* 加载期露出来的底色。原来是亮绿 #8aac86(实测 rgb(138,172,134)、亮度 148),
@@ -37,4 +58,52 @@ body {
   );
   pointer-events: none;
   z-index: 2;
+}
+
+.feeding-toggle {
+  position: fixed;
+  right: 16px;
+  top: 112px;
+  z-index: 30;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 11px;
+  background: rgba(6, 34, 31, 0.20);
+  box-shadow: 0 8px 22px rgba(0, 28, 25, 0.16);
+  color: rgba(244, 252, 248, 0.88);
+  opacity: 0.76;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: opacity 160ms ease-out, background-color 160ms ease-out, color 160ms ease-out, transform 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+.feeding-toggle:hover:not(:disabled) {
+  opacity: 1;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 20, 18, 0.30);
+}
+
+.feeding-toggle[aria-pressed="true"] {
+  opacity: 1;
+  border-color: var(--pond-ui-accent);
+  background: var(--pond-ui-accent);
+  color: var(--pond-ui-accent-ink);
+  box-shadow: 0 10px 28px rgba(5, 72, 63, 0.38);
+}
+
+.feeding-toggle:focus-visible {
+  outline: 2px solid var(--pond-ui-focus);
+  outline-offset: 2px;
+}
+
+.feeding-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feeding-toggle { transition: none; }
 }

@@ -14,9 +14,7 @@ import { createFishManager } from './features/fish-manager.js';
 import { createWeather } from './features/weather.js';
 import { createIdleDrift } from './features/idle-drift.js';
 import { createDayCycle } from './features/day-cycle.js';
-import { createFishDebugPanel } from './ui/fish-debug-panel.js';
-import { createRippleDebugPanel } from './ui/ripple-debug-panel.js';
-import { createClockDebugPanel } from './ui/clock-debug-panel.js';
+import { createSettingsPanel } from './ui/settings-panel.js';
 import { THEME } from './shared/legacy-assets.js';
 
 export function registerBuiltins({ creatures, features, context }) {
@@ -37,17 +35,18 @@ export function registerBuiltins({ creatures, features, context }) {
                 hud: g => { if (on && !THEME.clock.foreground) clock.draw(g); },
                 ui: g => { if (on && THEME.clock.foreground) clock.draw(g); }
             },
-            setEnabled(next) { on = !!next; }        // 与第一轮一致:关掉只是不画,不是卸载
+            setEnabled(next) { on = !!next; clock.setEnabled(on); },
+            dispose() { clock.dispose(); }
         };
     } });
 
     // ── 玩法:投喂(占输入模式 feed;开关走 config.enableFeeding) ──
     features.register({ id: 'feeding', title: '投喂', create: () => {
-        const feeding = createFeeding({ config: context.config, foods: context.foods, Food: context.Food, spawnRipple: context.spawnRipple });
-        return {
-            interactions: { feed: feeding.feedAt },
-            setEnabled(next) { context.config.enableFeeding = !!next; }
-        };
+        const feeding = createFeeding({
+            config: context.config, foods: context.foods, Food: context.Food,
+            spawnRipple: context.spawnRipple, input: context.input
+        });
+        return feeding;
     } });
 
     // ── 玩法:用户鱼数据库、添加器与状态面板 ──
@@ -87,18 +86,10 @@ export function registerBuiltins({ creatures, features, context }) {
         config: context.config, environment: context.environment
     }) });
 
-    // 独立编辑版的实时外观调试面板。
-    features.register({ id: 'fishDebugPanel', title: '鱼外观调试', create: () => createFishDebugPanel({
-        kois: context.kois, config: context.config, types: context.types, repository: context.repository
-    }) });
-
-    features.register({ id: 'rippleDebugPanel', title: '波纹调试', create: () => createRippleDebugPanel({
-        config: context.config, viewport: context.viewport, spawnRipple: context.spawnRipple,
-        repository: context.repository
-    }) });
-
-    features.register({ id: 'clockDebugPanel', title: '时间样式调试', create: () => createClockDebugPanel({
-        repository: context.repository
+    // 将鱼外观、波纹与时间样式收进同一个设置面板。
+    features.register({ id: 'settingsPanel', title: '设置', create: () => createSettingsPanel({
+        kois: context.kois, config: context.config, types: context.types,
+        viewport: context.viewport, spawnRipple: context.spawnRipple, repository: context.repository
     }) });
 
     return { creatures, features };
