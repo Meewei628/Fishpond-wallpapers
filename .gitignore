@@ -1,0 +1,8 @@
+# 本地临时工作目录（原生渲染实验、构建中间产物等）
+.tmp-*/
+
+# 工具缓存
+.impeccable-cache/
+
+# 依赖目录
+node_modules/
